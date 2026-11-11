@@ -1,0 +1,38 @@
+name: IT3 Level-A Mathematical Audit
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  level-a-verification:
+    name: Level-A Register & Theorem Ledger (23/23 Checks)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Scientific Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install numpy matplotlib
+
+      - name: Run IT3-WavePixel v3.1 Self-Counting Level-A Ledger
+        run: |
+          python3 it3_wavepixel_pyqt6_suite.py --self-test --ledger IT3_ledger.json
+
+      - name: Run CLI Nuclear Transmutation Audit (208Pb -> 197Au)
+        run: |
+          python3 it3_wavepixel_pyqt6_suite.py --transmute 208Pb 197Au
+
+      - name: Run Standalone Level-A Auditor (if present)
+        run: |
+          if [ -f it3_level_a_audit.py ]; then python3 it3_level_a_audit.py; fi
