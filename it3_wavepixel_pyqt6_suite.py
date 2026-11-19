@@ -1,23 +1,30 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-IT3-WavePixel v3.1  ::  Hardened Topological Cascade & Transmutation Suite
-Authors: Victor Logvinovich (ORCID 0009-0007-2040-6955), Kobrin, Belarus
-         Jean-Claude Perez  (ORCID 0000-0001-6446-2042), Montpellier
+================================================================================
+IT3-WavePixel v5.0 :: Full-Screen Interactive PyQt6 Verification Suite
+================================================================================
+Authors:
+  Victor Logvinovich (ORCID 0009-0007-2040-6955), Kobrin, Belarus
+  Jean-Claude Perez  (ORCID 0000-0001-6446-2042), Montpellier, France
 
-Epistemic protocol:  A = theorem, B = conditional, C = resonance, O = open.
-No hardcoded "N/N passed" banner: the ledger counts its own checks at runtime.
+Epistemic protocol:
+  A = theorem, B = conditional, C = resonance, O = open.
+  No hardcoded "N/N passed" banner: the ledger counts its own checks at runtime.
 
-Run:
-    python3 it3_wavepixel_pyqt6_suite.py                 # GUI (PyQt6)
-    python3 it3_wavepixel_pyqt6_suite.py --self-test     # Level-A ledger + firewall
-    python3 it3_wavepixel_pyqt6_suite.py --transmute 208Pb 197Au
-    python3 it3_wavepixel_pyqt6_suite.py --batch-export out/
-    python3 it3_wavepixel_pyqt6_suite.py --ledger ledger.json
+Launch GUI (opens maximized / full-screen workspace immediately):
+    python3 it3_wavepixel_pyqt6_suite_v5.py
+
+Optional CLI modes:
+    python3 it3_wavepixel_pyqt6_suite_v5.py --self-test
+    python3 it3_wavepixel_pyqt6_suite_v5.py --transmute 208Pb 197Au
+    python3 it3_wavepixel_pyqt6_suite_v5.py --batch-export out_v5/
+    python3 it3_wavepixel_pyqt6_suite_v5.py --ledger ledger_v5.json
+================================================================================
 """
 from __future__ import annotations
 
-import sys, os, re, math, csv, json, hashlib, argparse, itertools
+import sys, os, re, io, math, csv, json, hashlib, argparse, itertools
 from dataclasses import dataclass, asdict
 from fractions import Fraction
 from functools import lru_cache
@@ -26,7 +33,7 @@ from typing import List, Tuple, Dict, Optional, Callable
 import numpy as np
 import matplotlib
 
-VERSION = "3.1"
+VERSION = "5.0"
 _HEADLESS = any(f in sys.argv for f in
                 ("--self-test", "--transmute", "--batch-export", "--ledger", "--firewall"))
 if _HEADLESS:
@@ -36,29 +43,47 @@ else:
         matplotlib.use("QtAgg")
     except Exception:
         matplotlib.use("Agg")
+
 from matplotlib.figure import Figure
-from matplotlib.patches import Rectangle
+from matplotlib.patches import Rectangle, FancyArrowPatch
+
+HAS_PYQT = False
+HAS_NAV_TOOLBAR = False
+PYQT_IMPORT_ERR = ""
 
 try:
-    from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
-                                 QHBoxLayout, QGridLayout, QLabel, QSpinBox, QComboBox,
-                                 QPushButton, QTableWidget, QTableWidgetItem, QTabWidget,
-                                 QGroupBox, QHeaderView, QFileDialog, QMessageBox, QSlider,
-                                 QSplitter, QFrame, QTextEdit, QLineEdit, QScrollArea)
+    from PyQt6.QtWidgets import (
+        QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
+        QGridLayout, QLabel, QSpinBox, QComboBox, QPushButton, QTableWidget,
+        QTableWidgetItem, QTabWidget, QGroupBox, QHeaderView, QFileDialog,
+        QMessageBox, QSlider, QSplitter, QFrame, QTextEdit, QLineEdit,
+        QScrollArea, QSizePolicy, QStatusBar
+    )
     from PyQt6.QtCore import Qt, QTimer
-    from PyQt6.QtGui import QColor
+    from PyQt6.QtGui import QColor, QKeySequence, QShortcut
     from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
     HAS_PYQT = True
+    try:
+        from matplotlib.backends.backend_qtagg import NavigationToolbar2QT as NavigationToolbar
+        HAS_NAV_TOOLBAR = True
+    except Exception:
+        HAS_NAV_TOOLBAR = False
+except Exception as _exc:
+    PYQT_IMPORT_ERR = f"{type(_exc).__name__}: {_exc}"
+
+try:
+    from PIL import Image as PILImage
+    HAS_PIL = True
 except ImportError:
-    HAS_PYQT = False
+    HAS_PIL = False
 
 BG, PANEL, GRID, TXT = "#0B0E17", "#121726", "#232B42", "#E0E6ED"
-CYAN, PINK, AMBER, GREEN = "#00E5FF", "#FF2A85", "#FFC400", "#00E676"
+CYAN, PINK, AMBER, GREEN, VIOLET = "#00E5FF", "#FF2A85", "#FFC400", "#00E676", "#B388FF"
 BLOCK_COLORS = {"s": "#FFB300", "f": "#00E5FF", "d": "#FF1744", "p": "#B388FF"}
 
 
 # ============================================================================
-# 0. LEDGER
+# 0. RUNTIME SELF-COUNTING LEDGER & EXCEPTIONS
 # ============================================================================
 @dataclass
 class CheckRow:
@@ -120,7 +145,7 @@ class PhysicalViolation(ValueError):
 
 
 # ============================================================================
-# 1. 172-LAYER MATRIX
+# 1. 172-LAYER MATRIX & SQUARECLASS COMPILER CORE
 # ============================================================================
 class WavePixelMatrix:
     N_MAX = 172
@@ -129,7 +154,12 @@ class WavePixelMatrix:
         sum(2 * ((min(k, 11 - k) + 3) // 2) ** 2 for k in range(n + 1)) for n in range(12))
     DIODE_CLOSURES: Tuple[int, ...] = tuple(e for e in CLOSURES if e % 8 == 6)
     VACUUM_MASK = 0xE100
+    DORMANT_MASK = 0x1EFF
     KUMMER_WALL = 13
+    ALLOWED_SF = {1, 2, 3, 5, 6, 10, 15, 30}
+    SF_TO_OPCODE = {1: 0b000, 2: 0b001, 3: 0b010, 6: 0b011,
+                    5: 0b100, 10: 0b101, 15: 0b110, 30: 0b111}
+    OPCODE_TO_SF = {v: k for k, v in SF_TO_OPCODE.items()}
 
     BLOCK_SEQ: Dict[int, Tuple[Tuple[str, int], ...]] = {
         2: (("s", 2),),
@@ -218,6 +248,10 @@ class WavePixelMatrix:
     @classmethod
     def closure_distance(cls, z: int) -> int:
         return min(abs(z - s) for s in cls.CLOSURES)
+
+    @classmethod
+    def nearest_closure(cls, z: int) -> int:
+        return min(cls.CLOSURES, key=lambda s: (abs(z - s), s))
 
     @classmethod
     def reference_mass(cls, z: int) -> int:
@@ -311,7 +345,7 @@ class ThreeRegisterState:
 
 
 # ============================================================================
-# 3. BINARY FRICTION ALU
+# 3. BINARY FRICTION ALU, SQUARECLASS COMPILER & TORUS MODES
 # ============================================================================
 def wt(x: int) -> int:
     return bin(x).count("1")
@@ -325,6 +359,71 @@ def nu2(m: int) -> int:
         m >>= 1
         t += 1
     return t
+
+
+def squarefree(n: int) -> int:
+    x, i = abs(n), 2
+    while i * i <= x:
+        while x % (i * i) == 0:
+            x //= i * i
+        i += 1 if i == 2 else 2
+    return x
+
+
+def compile_radical(n: int) -> Dict[str, object]:
+    """Squareclass compiler for K = Q(sqrt(2), sqrt(3), sqrt(5))."""
+    if n <= 0:
+        raise ValueError("Radical input must be a positive integer.")
+    d = squarefree(n)
+    a = int(math.isqrt(n // d))
+    in_k = d in WPM.ALLOWED_SF
+    opcode = WPM.SF_TO_OPCODE.get(d, None)
+    return {
+        "n": n, "a": a, "d": d, "in_K": in_k, "opcode": opcode,
+        "opcode_bin": f"{opcode:03b}" if opcode is not None else "OVERFLOW",
+        "expr": f"{a}*sqrt({d})" if a > 1 and d > 1 else (f"{a}" if d == 1 else f"sqrt({d})"),
+    }
+
+
+def span_set(primes: List[int]) -> set:
+    vals = [1]
+    for p in primes:
+        vals += [v * p for v in vals]
+    return set(vals)
+
+
+def test_prime_triple_cascade(p1: int, p2: int, p3: int) -> Dict[str, object]:
+    """Tests how far the Pythagorean-Fibonacci cascade (1,2,3,5,8,13,21,34) survives in Q(sqrt(p1),sqrt(p2),sqrt(p3))."""
+    cascade = [1, 2, 3, 5, 8, 13, 21, 34]
+    S = span_set([squarefree(p1), squarefree(p2), squarefree(p3)])
+    passed = []
+    first_miss = None
+    for idx, x in enumerate(cascade, start=1):
+        sf = squarefree(x)
+        if sf in S:
+            passed.append((idx, x, sf))
+        else:
+            first_miss = (idx, x, sf)
+            break
+    return {"span": sorted(S), "passed": passed, "first_miss": first_miss}
+
+
+def hop_mask(M: int, i: int, j: int) -> int:
+    """One-electron hop operator R_ij(M) = M ^ (1<<i) ^ (1<<j)."""
+    if ((M >> i) & 1) != 1:
+        raise ValueError(f"Source bit {i} is not occupied (for M_Z, source must be < Z).")
+    if ((M >> j) & 1) != 0:
+        raise ValueError(f"Target bit {j} is not empty (for M_Z, target must be >= Z).")
+    return M ^ (1 << i) ^ (1 << j)
+
+
+def torus_mode_norm2(n1: int, n2: int, n3: int) -> Fraction:
+    """Discrete torus dual-lattice norm squared: n1^2 + n2^2/2 + n3^2/3."""
+    return Fraction(6 * n1 * n1 + 3 * n2 * n2 + 2 * n3 * n3, 6)
+
+
+def torus_holonomy(mode: Tuple[int, int, int], cycle: Tuple[int, int, int]) -> int:
+    return sum(a * b for a, b in zip(mode, cycle))
 
 
 class BinaryFrictionALU:
@@ -578,7 +677,6 @@ class AlphaCascadeEngine:
 
     @classmethod
     def canonical_path(cls, z1, a1, z2, a2) -> Tuple[List[DecayStepRecord], str]:
-        """Provably physical ordering: EC first, then alpha; else alpha,p,n; else Z then N."""
         steps: List[DecayStepRecord] = []
         zc, ac, idx = z1, a1, 1
 
@@ -671,14 +769,13 @@ class AlphaCascadeEngine:
 
 
 # ============================================================================
-# 5. HARDENING
+# 5. HARDENING & NUMEROLOGY FIREWALL
 # ============================================================================
 GRAM_MINK = (8, 16, 24, 40, 48, 80, 120, 240)
 
 
 @lru_cache(maxsize=8)
 def minkowski_min_vectors(bound: int = 1) -> Tuple[Tuple[int, ...], ...]:
-    """sigma(O_K): min ||.||^2 = 8 (AM-GM), equality only at +-1 (Kronecker)."""
     out = []
     for c in itertools.product(range(-bound, bound + 1), repeat=8):
         if any(c) and sum(g * ci * ci for g, ci in zip(GRAM_MINK, c)) == 8:
@@ -691,7 +788,6 @@ def hermite_gamma_mink() -> float:
 
 
 def fcc_fraction(N: int) -> float:
-    """Lemma G: N cancels identically."""
     return (N * (4.0 / 3.0) * math.pi * (math.sqrt(2.0) / 4.0) ** 3) / (N / 4.0)
 
 
@@ -704,8 +800,8 @@ def digit_diff(a: int, b: int, base: int) -> int:
     return sum(x != y for x, y in zip(da, db))
 
 
-def diode_scan(E: int = 86) -> Dict[int, Tuple[int, int]]:
-    return {b: (digit_diff(E + 2, E, b), digit_diff(E + 1, E - 1, b)) for b in range(2, 17)}
+def diode_scan(E: int = 86, b_max: int = 16) -> Dict[int, Tuple[int, int]]:
+    return {b: (digit_diff(E + 2, E, b), digit_diff(E + 1, E - 1, b)) for b in range(2, b_max + 1)}
 
 
 FIREWALL_POOL = [1, 2, 3, 5, 6, 8, 10, 12, 13, 15, 16, 21, 24, 30, 32, 34, 43,
@@ -740,17 +836,7 @@ def grammar_coverage(lo=2, hi=256) -> float:
     return sum(1 for t in range(lo, hi + 1) if simple_hits(t)) / (hi - lo + 1)
 
 
-def squarefree(n: int) -> int:
-    x, i = abs(n), 2
-    while i * i <= x:
-        while x % (i * i) == 0:
-            x //= i * i
-        i += 1 if i == 2 else 2
-    return x
-
-
 def valley_rational(z: int) -> int:
-    """Legacy 62/25 fit, kept only as a falsified null model."""
     q, r = divmod(62 * z + (50 if z % 2 else 0), 25)
     return q + 1 if r * 2 > 25 else q
 
@@ -770,7 +856,7 @@ ANTI_CLAIMS = [
 
 
 # ============================================================================
-# 6. OVERLAP-PROOF RENDERING
+# 6. OVERLAP-PROOF RENDERING (ALL GRAPHICAL TABS)
 # ============================================================================
 EQ_GAP, CELL_W, CELL_H, GUTTER = 1.15, 0.90, 0.74, 9.0
 
@@ -804,9 +890,11 @@ def _draw_pixel_grid(fig, rect, color_fn, alpha_fn, edge_fn, ls_fn):
     ax.set_xlim(*xlim); ax.set_ylim(*ylim)
     px, py = axes_pt_scale(fig, rect, xlim, ylim)
     cw, ch = CELL_W * px, CELL_H * py
+    cell_centers: Dict[int, Tuple[float, float]] = {}
     for z in range(1, 173):
         fl, blk, mu, _ = WPM.get_coordinates(z)
         xc, yc = cell_xy(fl, mu, WPM.CAPACITIES[fl], ymap)
+        cell_centers[z] = (xc, yc)
         ax.add_patch(Rectangle((xc - CELL_W / 2, yc - CELL_H / 2), CELL_W, CELL_H,
                                facecolor=color_fn(z, blk), alpha=alpha_fn(z),
                                edgecolor=edge_fn(z, blk), lw=0.9, ls=ls_fn(z)))
@@ -827,13 +915,13 @@ def _draw_pixel_grid(fig, rect, color_fn, alpha_fn, edge_fn, ls_fn):
         f = max(3.0, min(8.5, 0.92 * GUTTER * px / (0.58 * len(lab))))
         ax.text(-16.8, ymap[fl], lab, ha="right", va="center",
                 fontsize=f, fontweight="bold", color=CYAN)
-    return ax, ymap, px, py, cw, ch
+    return ax, ymap, px, py, cw, ch, cell_centers
 
 
-def render_matrix(fig, records=None, idx=0):
+def render_matrix(fig, records=None, idx=0, selected_z: Optional[int] = None) -> Dict[int, Tuple[float, float]]:
     fig.clear()
     fig.patch.set_facecolor(BG)
-    ax, ymap, px, py, cw, ch = _draw_pixel_grid(
+    ax, ymap, px, py, cw, ch, centers = _draw_pixel_grid(
         fig, [0.012, 0.02, 0.976, 0.905],
         lambda z, b: BLOCK_COLORS[b],
         lambda z: 0.22 if z >= 119 else 0.42,
@@ -847,27 +935,44 @@ def render_matrix(fig, records=None, idx=0):
     ax.text(0, eq, txt, ha="center", va="center", fontsize=f_eq, color=PINK,
             fontweight="bold", zorder=3,
             bbox=dict(boxstyle="round,pad=0.22", facecolor=BG, edgecolor=PINK, alpha=0.95))
+
     if records:
         chain = [records[0].z_parent] + [r.z_daughter for r in records]
-        pts = [cell_xy(*WPM.get_coordinates(z)[0:1],
-                       WPM.get_coordinates(z)[2], WPM.CAPACITIES[WPM.get_coordinates(z)[0]],
-                       ymap) for z in chain]
+        pts = [centers[z] for z in chain]
         ax.plot([p[0] for p in pts], [p[1] for p in pts], color=GREEN, lw=2.2,
                 marker="o", markersize=5.0, zorder=10,
                 label=f"trajectory Z={chain[0]} -> {chain[-1]}")
         r = records[max(0, min(idx, len(records) - 1))]
         for z in (r.z_parent, r.z_daughter):
-            fl, _, mu, _ = WPM.get_coordinates(z)
-            x, y = cell_xy(fl, mu, WPM.CAPACITIES[fl], ymap)
+            x, y = centers[z]
             ax.scatter([x], [y], color=AMBER, s=210, zorder=12, edgecolors=BG, lw=1.8)
+
+    if selected_z is not None and 1 <= selected_z <= 172:
+        fz = WPM.facing_partner(selected_z)
+        x1, y1 = centers[selected_z]
+        x2, y2 = centers[fz]
+        for zx, zy, col in ((x1, y1, "#FFFFFF"), (x2, y2, CYAN)):
+            ax.add_patch(Rectangle((zx - CELL_W / 2 - 0.06, zy - CELL_H / 2 - 0.06),
+                                   CELL_W + 0.12, CELL_H + 0.12,
+                                   facecolor="none", edgecolor=col, lw=2.6, zorder=14))
+        arc = FancyArrowPatch((x1, y1), (x2, y2),
+                              connectionstyle="arc3,rad=0.18",
+                              arrowstyle="<->", mutation_scale=14,
+                              color=CYAN, lw=1.8, ls=":", zorder=13)
+        ax.add_patch(arc)
+        wn = WPM.nuclear_facing_word(selected_z)
+        ax.scatter([], [], color="#FFFFFF", edgecolor=CYAN, s=90,
+                   label=f"Selected: {WPM.get_symbol(selected_z)}({selected_z}) <-> F={WPM.get_symbol(fz)}({fz}) [0x{wn:04X}]")
+
     for b, c in BLOCK_COLORS.items():
         ax.scatter([], [], color=c, s=80, label=f"{b}-block")
     ax.scatter([], [], facecolor="none", edgecolor=TXT, ls="--", s=80, label="predicted Z>=119")
     ax.legend(loc="lower right", ncol=6, facecolor=PANEL, edgecolor=GRID,
-              labelcolor=TXT, fontsize=8.0)
+              labelcolor=TXT, fontsize=7.8)
     ax.set_title("IT3 TOPOLOGICAL PERIODIC MATRIX  ::  172-layer wave-pixel bicone"
-                 "   (Victor Logvinovich & Jean-Claude Perez)",
-                 fontsize=11.0, fontweight="bold", color=CYAN, pad=6)
+                 "   (Click any cell to inspect mirror partner F(Z))",
+                 fontsize=10.8, fontweight="bold", color=CYAN, pad=6)
+    return centers
 
 
 def render_cern(fig, res):
@@ -877,8 +982,8 @@ def render_cern(fig, res):
         return
     fig.suptitle(f"TRANSMUTATION LAB :: {res.direct_equation}",
                  fontsize=11.0, fontweight="bold", color=AMBER)
-    gs = fig.add_gridspec(2, 2, height_ratios=[1.0, 1.45], hspace=0.30, wspace=0.20,
-                          left=0.06, right=0.97, top=0.90, bottom=0.05)
+    gs = fig.add_gridspec(2, 2, height_ratios=[1.0, 1.45], hspace=0.32, wspace=0.22,
+                          left=0.135, right=0.97, top=0.90, bottom=0.05)
     ax = fig.add_subplot(gs[0, 0], facecolor=PANEL)
     mat = np.array([[(res.z1 >> (7 - b)) & 1 for b in range(8)],
                     [(res.z2 >> (7 - b)) & 1 for b in range(8)],
@@ -918,7 +1023,7 @@ def render_cern(fig, res):
     ax2.legend(loc="best", facecolor=BG, edgecolor=GRID, labelcolor=TXT, fontsize=7.6)
 
     zmin, zmax = min(res.z1, res.z2), max(res.z1, res.z2)
-    axm, ymap, px, py, cw, ch = _draw_pixel_grid(
+    axm, ymap, px, py, cw, ch, _ = _draw_pixel_grid(
         fig, [0.045, 0.045, 0.94, 0.44],
         lambda z, b: CYAN if z <= zmin else (PINK if z <= zmax else "#182034"),
         lambda z: 0.45 if z <= zmin else (0.92 if z <= zmax else 0.35),
@@ -940,10 +1045,10 @@ def render_hud(fig, records, idx=0):
     if not records:
         ax = fig.add_axes([0, 0, 1, 1]); ax.axis("off")
         ax.text(0.5, 0.5, "no cascade records", ha="center", color=TXT)
-        return
+        return None
     fw, fh = fig.get_size_inches()
     gs = fig.add_gridspec(3, 2, height_ratios=[1.25, 1.0, 0.9], width_ratios=[1.3, 1.0],
-                          hspace=0.50, wspace=0.22, left=0.08, right=0.97,
+                          hspace=0.50, wspace=0.22, left=0.075, right=0.97,
                           top=0.91, bottom=0.07)
     zd = [r.z_daughter for r in records]
     zp = [r.z_parent for r in records]
@@ -967,20 +1072,25 @@ def render_hud(fig, records, idx=0):
     walls = [r for r in records if r.tfi >= 3]
     ax1.scatter([r.z_daughter for r in walls], [r.tfi for r in walls],
                 color=PINK, s=110, zorder=6, edgecolors="white", lw=1.1)
-    keep_every = max(1, int(math.ceil(52.0 / max(step_pt, 1e-6))))
-    shown = 0
-    for i, r in enumerate(walls):
-        if shown >= 10:
+    z_span = max(1, zp[0] - zd[-1])
+    min_dz = max(3.5, z_span * 0.095)
+    placed_z: List[int] = []
+    prioritized = sorted(walls, key=lambda r: (r is not act, -r.tfi, -r.z_parent))
+    for r in prioritized:
+        if len(placed_z) >= 8:
             break
-        if (i % keep_every) and (r is not act):
+        if any(abs(r.z_daughter - pz) < min_dz for pz in placed_z):
             continue
+        dy = 15 if r.atfi >= r.tfi else 10
         ax1.annotate(f"{WPM.get_symbol(r.z_parent)}->{WPM.get_symbol(r.z_daughter)} TFI={r.tfi}",
-                     (r.z_daughter, r.tfi), textcoords="offset points", xytext=(0, 9),
-                     ha="center", fontsize=7.2, fontweight="bold", color=PINK)
-        shown += 1
+                     (r.z_daughter, r.tfi), textcoords="offset points", xytext=(0, dy),
+                     ha="center", fontsize=7.4, fontweight="bold", color=PINK, zorder=8,
+                     bbox=dict(boxstyle="round,pad=0.14", facecolor=BG, edgecolor="none", alpha=0.82))
+        placed_z.append(r.z_daughter)
+
     rail = "even rail LSB=0" if zp[0] % 2 == 0 else "odd rail LSB=1"
     ax1.set_title(f"ALPHA-CASCADE ENGINE :: {WPM.get_symbol(zp[0])}(Z={zp[0]}) -> "
-                  f"{WPM.get_symbol(zd[-1])}(Z={zd[-1]}) [{rail}]",
+                  f"{WPM.get_symbol(zd[-1])}(Z={zd[-1]}) [{rail}]  (Click chart to jump step)",
                   fontsize=10.2, fontweight="bold", color=CYAN, pad=8)
     ax1.set_ylabel("friction index", color=TXT, fontsize=9)
     ax1.set_ylim(-0.4, max(max(tfis), 4) + 2.8)
@@ -1048,10 +1158,208 @@ def render_hud(fig, records, idx=0):
     ax4.set_title("Oh subshell branching track", fontsize=9.6, fontweight="bold", color=TXT)
     ax4.legend(loc="upper right", ncol=4, facecolor=BG, edgecolor=GRID,
                labelcolor=TXT, fontsize=7.6)
+    return (ax1, ax3, ax4)
+
+
+def render_dual_rail(fig, z_even_start: int = 120, z_stop: int = 82):
+    """Tab 5: Side-by-side Even vs Odd Parity Rail Comparator + Base-2..16 Diode Scan."""
+    fig.clear()
+    fig.patch.set_facecolor(BG)
+    z_even = z_even_start if z_even_start % 2 == 0 else z_even_start + 1
+    z_even = min(172, max(6, z_even))
+    z_odd = z_even - 1
+    stop_e = z_stop if z_stop % 2 == 0 else max(2, z_stop - 1)
+    stop_o = max(1, stop_e - 1)
+
+    ch_e = AlphaCascadeEngine.trace_chain(z_even, WPM.reference_mass(z_even), stop_e)
+    ch_o = AlphaCascadeEngine.trace_chain(z_odd, WPM.reference_mass(z_odd), stop_o)
+
+    gs = fig.add_gridspec(3, 2, height_ratios=[1.40, 0.92, 0.95], width_ratios=[1.25, 1.0],
+                          hspace=0.48, wspace=0.22, left=0.115, right=0.97, top=0.91, bottom=0.07)
+
+    ax1 = fig.add_subplot(gs[0, :], facecolor=PANEL)
+    ze_d = [r.z_daughter for r in ch_e.records]
+    te = [r.tfi for r in ch_e.records]
+    zo_d = [r.z_daughter for r in ch_o.records]
+    to = [r.tfi for r in ch_o.records]
+    ymax = max(max(te, default=4), max(to, default=4))
+
+    ax1.plot(ze_d, te, color=CYAN, lw=2.2, marker="o", markersize=6.0,
+             label=f"Even rail: {WPM.get_symbol(z_even)}({z_even}) -> {WPM.get_symbol(stop_e)}({stop_e}) [LSB=0]")
+    ax1.plot(zo_d, to, color=PINK, lw=2.0, ls="--", marker="D", markersize=5.5,
+             label=f"Odd rail: {WPM.get_symbol(z_odd)}({z_odd}) -> {WPM.get_symbol(stop_o)}({stop_o}) [LSB=1]")
+    ax1.axhline(2.5, color=AMBER, ls=":", lw=1.2, alpha=0.8, label="Domain Wall / SF Threshold (TFI >= 3)")
+
+    for e_cl in WPM.DIODE_CLOSURES:
+        if stop_o <= e_cl <= z_even:
+            ax1.axvline(e_cl, color=GREEN, ls="-.", lw=1.1, alpha=0.65)
+            ax1.text(e_cl, ymax + 1.05, f"Diode E={e_cl}", ha="center", va="center", fontsize=7.6,
+                     fontweight="bold", color=GREEN, zorder=7,
+                     bbox=dict(boxstyle="round,pad=0.16", facecolor=BG, edgecolor=GREEN, alpha=0.92))
+
+    key_even = {120: (14, 11), 112: (20, 10), 104: (18, 10), 96: (22, 10), 88: (14, 10), 128: (0, 11)}
+    key_odd = {113: (-22, 10), 105: (-20, 10), 97: (-24, 10), 129: (0, 11)}
+    key_all = set(key_even.keys()) | set(key_odd.keys())
+
+    for r in ch_e.records:
+        if r.z_parent in key_even:
+            dx, dy = key_even[r.z_parent]
+            ax1.annotate(f"{WPM.get_symbol(r.z_parent)}->{WPM.get_symbol(r.z_daughter)} ({r.tfi})",
+                         (r.z_daughter, r.tfi), textcoords="offset points", xytext=(dx, dy),
+                         ha="center", fontsize=7.3, fontweight="bold", color=CYAN, zorder=8,
+                         bbox=dict(boxstyle="round,pad=0.12", facecolor=BG, edgecolor="none", alpha=0.82))
+    for r in ch_o.records:
+        if r.z_parent in key_odd:
+            dx, dy = key_odd[r.z_parent]
+            ax1.annotate(f"{WPM.get_symbol(r.z_parent)}->{WPM.get_symbol(r.z_daughter)} ({r.tfi})",
+                         (r.z_daughter, r.tfi), textcoords="offset points", xytext=(dx, dy),
+                         ha="center", fontsize=7.3, fontweight="bold", color=PINK, zorder=8,
+                         bbox=dict(boxstyle="round,pad=0.12", facecolor=BG, edgecolor="none", alpha=0.82))
+
+    ax1.set_ylim(-0.3, ymax + 2.85)
+    ax1.invert_xaxis()
+    ax1.grid(True, color=GRID, ls="--", alpha=0.5)
+    ax1.tick_params(colors=TXT, labelsize=8.4)
+    ax1.set_ylabel("Binary TFI = wt(Z XOR (Z-2))", color=TXT, fontsize=9)
+    ax1.set_title("DUAL-RAIL PARITY COMPARATOR :: Even vs Odd Alpha-Cascades & Equatorial Diodes (Logvinovich & Perez)",
+                  fontsize=10.8, fontweight="bold", color=CYAN, pad=10)
+    ax1.legend(loc="upper center", ncol=3, facecolor=BG, edgecolor=GRID, labelcolor=TXT, fontsize=7.7)
+
+    # Middle panel: Parallel Rail Schematic
+    ax2 = fig.add_subplot(gs[1, :], facecolor=PANEL)
+    ax2.axhline(1.0, color=CYAN, lw=2.0, alpha=0.35, zorder=1)
+    ax2.axhline(0.0, color=PINK, lw=2.0, alpha=0.35, zorder=1)
+    step_dec = max(1, len(ch_e.records) // 18)
+    for idx_r, r in enumerate(ch_e.records):
+        ax2.scatter([r.z_daughter], [1.0], color=BLOCK_COLORS[r.block_daughter], s=210,
+                    edgecolors=PINK if r.tfi >= 3 else "white", lw=2.0 if r.tfi >= 3 else 0.9, zorder=4)
+        if idx_r % step_dec == 0 or r.z_parent in key_all:
+            ax2.text(r.z_daughter, 1.24, f"{WPM.get_symbol(r.z_daughter)}\n{r.z_daughter}",
+                     ha="center", va="bottom", fontsize=6.8, color=TXT, fontweight="bold")
+    for idx_r, r in enumerate(ch_o.records):
+        ax2.scatter([r.z_daughter], [0.0], color=BLOCK_COLORS[r.block_daughter], s=210,
+                    edgecolors=PINK if r.tfi >= 3 else "white", lw=2.0 if r.tfi >= 3 else 0.9, zorder=4)
+        if idx_r % step_dec == 0 or r.z_parent in key_all:
+            ax2.text(r.z_daughter, -0.26, f"{WPM.get_symbol(r.z_daughter)}\n{r.z_daughter}",
+                     ha="center", va="top", fontsize=6.8, color=TXT, fontweight="bold")
+    ax2.set_yticks([0.0, 1.0])
+    ax2.set_yticklabels(["ODD RAIL (LSB=1)", "EVEN RAIL (LSB=0)"], fontsize=8.5, fontweight="bold", color=TXT)
+    ax2.set_ylim(-0.75, 1.75)
+    ax2.invert_xaxis()
+    ax2.tick_params(colors=TXT, labelsize=8.2)
+    ax2.set_title("Locked Parallel Parity Tracks (Pink Ring = Domain Wall TFI >= 3)", fontsize=9.8, fontweight="bold", color=TXT)
+
+    # Bottom-Left: Base-2..16 Diode Specificity Scan
+    ax3 = fig.add_subplot(gs[2, 0], facecolor=PANEL)
+    scan = diode_scan(86, 16)
+    bases = list(scan.keys())
+    ev_vals = [scan[b][0] for b in bases]
+    od_vals = [scan[b][1] for b in bases]
+    x = np.arange(len(bases))
+    w = 0.36
+    ax3.bar(x - w / 2, ev_vals, width=w, color=CYAN, label="Even 88->86 digit diffs")
+    ax3.bar(x + w / 2, od_vals, width=w, color=PINK, label="Odd 87->85 digit diffs")
+    ax3.set_xticks(x)
+    ax3.set_xticklabels([f"b{b}" for b in bases], fontsize=7.6, color=TXT)
+    ax3.set_ylabel("Changed digits", color=TXT, fontsize=8.5)
+    ax3.set_title("Radix Audit (Base 2..16 at E=86): Diode Asymmetry Peaks Strictly in Base 2",
+                  fontsize=9.4, fontweight="bold", color=AMBER)
+    ax3.grid(True, axis="y", color=GRID, ls="--", alpha=0.5)
+    ax3.tick_params(colors=TXT, labelsize=8.0)
+    ax3.legend(loc="upper right", facecolor=BG, edgecolor=GRID, labelcolor=TXT, fontsize=7.6)
+
+    # Bottom-Right: Single-Alpha ATFI^2 Histogram across Z=2..172
+    ax4 = fig.add_subplot(gs[2, 1], facecolor=PANEL)
+    hist: Dict[int, int] = {}
+    for z in range(2, 173):
+        sq = BinaryFrictionALU.compute_atfi_sq(z, z - 2)[0]
+        hist[sq] = hist.get(sq, 0) + 1
+    ks = sorted(hist.keys())
+    vs = [hist[k] for k in ks]
+    bar_cols = [CYAN if k == 0 else (AMBER if k <= 4 else (VIOLET if k == 8 else PINK)) for k in ks]
+    ax4.bar([str(k) for k in ks], vs, color=bar_cols, edgecolor="white", lw=0.7)
+    for idx_k, v in enumerate(vs):
+        ax4.text(idx_k, v + 1.2, str(v), ha="center", va="bottom", fontsize=7.8, fontweight="bold", color=TXT)
+    ax4.set_ylim(0, max(vs) + 10)
+    ax4.set_xlabel("Exact Integer ATFI² = (Δns)² + 2(Δnp)² + 3(Δnd)²", color=TXT, fontsize=8.3)
+    ax4.set_ylabel("Count (Z=2..172)", color=TXT, fontsize=8.5)
+    ax4.set_title("Global Toroidal Friction Spectrum (ATFI² Histogram)", fontsize=9.4, fontweight="bold", color=GREEN)
+    ax4.grid(True, axis="y", color=GRID, ls="--", alpha=0.5)
+    ax4.tick_params(colors=TXT, labelsize=8.0)
+
+
+def render_rom_figure(fig):
+    """Tab 6 Top Graphic: 16-Bit Vacuum ROM Mask 0xE100 & Central Edge 0x56|0x57 -> 0xAD."""
+    fig.clear()
+    fig.patch.set_facecolor(BG)
+    gs = fig.add_gridspec(2, 1, height_ratios=[1.15, 1.0], hspace=0.45,
+                          left=0.05, right=0.97, top=0.88, bottom=0.10)
+
+    ax1 = fig.add_subplot(gs[0], facecolor=PANEL)
+    mask = WPM.VACUUM_MASK
+    bits = [(mask >> (15 - i)) & 1 for i in range(16)]
+    nibble_labels = ["N3: 0xE (p-track + barrier)", "N2: 0x1 (s-gateway)",
+                     "N1: 0x0 (dormant d-core)", "N0: 0x0 (dormant f-core)"]
+    for i, b in enumerate(bits):
+        col = CYAN if (b == 1 and i < 4) else (AMBER if b == 1 else "#182034")
+        ax1.add_patch(Rectangle((i, 0), 0.92, 0.90, facecolor=col, edgecolor="#FFFFFF" if b else GRID, lw=1.2))
+        ax1.text(i + 0.46, 0.48, str(b), ha="center", va="center", fontsize=12, fontweight="bold",
+                 color=BG if b else "#6C7A9C")
+        ax1.text(i + 0.46, -0.20, f"b{15-i}", ha="center", va="center", fontsize=7.5, color=TXT)
+    for nb in range(4):
+        ax1.axvline(nb * 4 - 0.04, color=PINK, lw=1.6, ls="--")
+        ax1.text(nb * 4 + 1.96, 1.12, nibble_labels[nb], ha="center", va="center",
+                 fontsize=8.2, fontweight="bold", color=AMBER if nb == 1 else CYAN)
+    ax1.set_xlim(-0.3, 16.2)
+    ax1.set_ylim(-0.42, 1.35)
+    ax1.axis("off")
+    ax1.set_title("16-BIT VACUUM ROM MASK :: 57,600 = 240² = 0xE100 (4 Active Valence Bits s+p | 12 Dormant Core Bits d+f)",
+                  fontsize=10.2, fontweight="bold", color=CYAN, pad=6)
+
+    ax2 = fig.add_subplot(gs[1], facecolor=PANEL)
+    nodes = [
+        (85, "0x55", "L8=85 (At)\nLSB=1 (P)", VIOLET),
+        (86, "0x56", "Rn Equator (A)\nLSB=0 (0x56)", CYAN),
+        (87, "0x57", "Fr Equator (P)\nLSB=1 (0x57)", AMBER),
+        (88, "0x58", "Ra Barrier\nLSB=0 (TFI=3)", PINK),
+        (172, "0xAC", "FCC Closure\nLow=0xC=12 (OK)", GREEN),
+        (173, "0xAD", "86+87=173\nLow=0xD=13 WALL!", "#FF1744"),
+    ]
+    for idx_n, (val, hx, desc, col) in enumerate(nodes):
+        x0 = idx_n * 2.65
+        ax2.add_patch(Rectangle((x0, 0.1), 2.35, 0.85, facecolor=col, alpha=0.22, edgecolor=col, lw=1.8))
+        ax2.text(x0 + 1.175, 0.72, f"{val}  ({hx})", ha="center", va="center", fontsize=9.5, fontweight="bold", color=col)
+        ax2.text(x0 + 1.175, 0.45, f"{val:08b}₂", ha="center", va="center", fontsize=8.0, color="#FFFFFF")
+        ax2.text(x0 + 1.175, 0.21, desc, ha="center", va="center", fontsize=7.0, color=TXT)
+    ax2.set_xlim(-0.3, 15.8)
+    ax2.set_ylim(-0.05, 1.10)
+    ax2.axis("off")
+    ax2.set_title("CENTRAL FCC CELL (85..88, Checksum 346=0x15A) & KUMMER WALL EXPOSURE (0xAC -> 0xAD, Low Nibble 0xD=13)",
+                  fontsize=9.8, fontweight="bold", color=AMBER, pad=4)
+
+
+def export_cascade_gif(records: List[DecayStepRecord], out_path: str, duration_ms: int = 550) -> None:
+    """Renders an animated step-by-step GIF of the active cascade HUD."""
+    if not HAS_PIL:
+        raise RuntimeError("Pillow (PIL) is required to export animated GIFs: pip install pillow")
+    if not records:
+        raise ValueError("No cascade steps to animate.")
+    frames = []
+    fig = Figure(figsize=(13.5, 8.4), dpi=95, facecolor=BG)
+    for step_i in range(len(records)):
+        render_hud(fig, records, step_i)
+        buf = io.BytesIO()
+        fig.savefig(buf, format="png", dpi=95, facecolor=BG)
+        buf.seek(0)
+        frames.append(PILImage.open(buf).convert("RGB"))
+    frames[0].save(
+        out_path, save_all=True, append_images=frames[1:],
+        duration=duration_ms, loop=0, optimize=True
+    )
 
 
 # ============================================================================
-# 7. SELF-TEST
+# 7. SELF-TEST LEDGER (A01..A20 + 6 REFUTED REGRESSION GUARDS)
 # ============================================================================
 def _subtractive_row(n: int) -> List[int]:
     row = [1]
@@ -1316,6 +1624,43 @@ def build_ledger() -> Ledger:
         return True
     L.check("A", "A17 guards: overflow, N<0, N<2 alpha, parity rail", guards)
 
+    def central_edge_check():
+        A, P = 86, 87
+        cell = (85, 86, 87, 88)
+        return (A == 0x56 and P == 0x57 and (A ^ P) == 1 and (A + P) == 173 == 0xAD
+                and ((A & 0xF) + (P & 0xF)) < 16 and (((A >> 4) & 0xF) + ((P >> 4) & 0xF)) < 16
+                and (172 & 0xF) == 12 and squarefree(12) in WPM.ALLOWED_SF
+                and (173 & 0xF) == 13 and squarefree(13) not in WPM.ALLOWED_SF
+                and sum(cell) == 346 == 0x15A == 2 * 173
+                and (1 << 8) == 3 * 85 + 1)
+    L.check("A", "A18 central edge 86|87 -> 0xAD, FCC cell 346, gateway 2^8=3*85+1", central_edge_check)
+
+    def rank3_opt():
+        casc_sf = [squarefree(x) for x in (1, 2, 3, 5, 8, 13)]
+        primes = [2, 3, 5, 7, 11, 13]
+        pass5 = [t for t in itertools.combinations(primes, 3)
+                 if all(sf in span_set(list(t)) for sf in casc_sf[:5])]
+        pass6 = [t for t in itertools.combinations(primes, 3)
+                 if all(sf in span_set(list(t)) for sf in casc_sf)]
+        return pass5 == [(2, 3, 5)] and pass6 == []
+    L.check("A", "A19 rank-3 squareclass uniqueness (2,3,5) & cascade wall optimality", rank3_opt)
+
+    def chem_and_cs():
+        m20 = WPM.mask_int(20)
+        m20_h = hop_mask(m20, 0, 25)
+        vl, vq = 2, 3
+        vt, dim_i = vl + vq, vl * vq
+        f3 = vt * dim_i * dim_i + (vq * vq - vl * vl)
+        de, dq = Fraction(vl, vl), Fraction(vl, vt)
+        ae = Fraction(4) * de / (Fraction(4) + de * de)
+        aq = Fraction(4) * dq / (Fraction(4) + dq * dq)
+        afb = Fraction(3, 4) * ae * aq
+        return (10 in WPM.CLOSURES and 18 in WPM.CLOSURES and 11 + 17 == 10 + 18
+                and wt(m20) == wt(m20_h) and wt(m20 ^ m20_h) == 2
+                and f3 == 185 == 0x00B9 and afb == Fraction(3, 13)
+                and torus_mode_norm2(0, 0, 1) == Fraction(1, 3))
+    L.check("A", "A20 NaCl repair, hop XOR=2, F3loop=185, A_FB=3/13, T^3 mode 1/3", chem_and_cs)
+
     for name, fn in ANTI_CLAIMS:
         L.check("REFUTED", name, fn, expect=False, note="must stay false (regression)")
     return L
@@ -1357,7 +1702,7 @@ def run_self_test(json_path: Optional[str] = None) -> int:
 
 
 # ============================================================================
-# 8. CLI
+# 8. CLI HELPERS
 # ============================================================================
 def cli_transmute(src: str, dst: str) -> int:
     z1, a1 = WPM.parse_nuclide_input(src)
@@ -1413,92 +1758,220 @@ def batch_export(outdir: str) -> int:
     fig = Figure(figsize=(15, 10), dpi=110, facecolor=BG)
     render_cern(fig, res)
     fig.savefig(os.path.join(outdir, "IT3_cern_Pb_Au.png"), dpi=150, facecolor=BG)
+
+    fig_dr = Figure(figsize=(15, 9.5), dpi=110, facecolor=BG)
+    render_dual_rail(fig_dr, 120, 82)
+    fig_dr.savefig(os.path.join(outdir, "IT3_dual_rail_Z120_Z119.png"), dpi=150, facecolor=BG)
+
+    fig_rom = Figure(figsize=(15, 6.2), dpi=110, facecolor=BG)
+    render_rom_figure(fig_rom)
+    fig_rom.savefig(os.path.join(outdir, "IT3_vacuum_ROM_0xE100.png"), dpi=150, facecolor=BG)
+
     build_ledger().to_json(os.path.join(outdir, "IT3_ledger.json"))
     print(f"batch export -> {os.path.abspath(outdir)}")
     return 0
 
 
 # ============================================================================
-# 9. GUI
+# 9. PYQT6 FULL-SCREEN INTERACTIVE VERIFICATION SUITE (7 TABS)
 # ============================================================================
 if HAS_PYQT:
     class IT3Suite(QMainWindow):
         def __init__(self):
             super().__init__()
-            self.setWindowTitle(f"IT3-WavePixel v{VERSION} :: Hardened Cascade & "
-                                f"Transmutation Suite [Logvinovich & Perez]")
-            self.resize(1720, 1010)
+            self.setWindowTitle(
+                f"IT3-WavePixel v{VERSION} :: Interactive Verification, Dual-Rail & "
+                f"Binary Register Suite [Victor Logvinovich & Jean-Claude Perez]"
+            )
             self.records: List[DecayStepRecord] = []
             self.halt_msg = ""
             self.ec_switches: set = set()
             self.idx = 0
+            self.selected_matrix_z: Optional[int] = None
+            self.matrix_centers: Dict[int, Tuple[float, float]] = {}
+            self.hud_axes = None
             self.last: Optional[CustomTransmutationResult] = None
+
             self.timer = QTimer(self)
             self.timer.setInterval(650)
             self.timer.timeout.connect(self._advance)
+
             self._style()
             self._build()
             self.recompute()
             self.transmute()
+            self.run_compiler_ui()
+            self.run_chem_hop_ui()
+            self.run_torus_mode_ui()
+            self.populate_ledger_tab()
+            self.run_prime_triple_test_ui()
+            self.run_radix_sandbox_ui()
+            self.run_firewall_sandbox_ui()
+
+            QShortcut(QKeySequence("F11"), self).activated.connect(self.toggle_fullscreen)
+            QShortcut(QKeySequence("Escape"), self).activated.connect(self._exit_fullscreen_if_active)
 
         def _style(self):
             self.setStyleSheet(f"""
-            QMainWindow,QWidget{{background:{BG};color:{TXT};
-                font-family:'Menlo','Consolas',monospace;font-size:12px;}}
-            QGroupBox{{background:#111625;border:1px solid {GRID};border-radius:6px;
-                margin-top:10px;padding-top:10px;font-weight:bold;color:{CYAN};}}
-            QGroupBox::title{{subcontrol-origin:margin;left:10px;padding:0 6px;}}
-            QPushButton{{background:#19223A;color:{CYAN};border:1px solid {CYAN};
-                border-radius:4px;padding:5px 9px;font-weight:bold;}}
-            QPushButton:hover{{background:{CYAN};color:{BG};}}
-            QPushButton#gold{{background:#2B2108;color:{AMBER};border:1px solid {AMBER};}}
-            QPushButton#gold:hover{{background:{AMBER};color:{BG};}}
-            QPushButton#pink{{background:#2A1228;color:{PINK};border:1px solid {PINK};}}
-            QPushButton#pink:hover{{background:{PINK};color:{BG};}}
-            QSpinBox,QComboBox,QLineEdit{{background:#0D121F;color:{AMBER};
-                border:1px solid #2E3D61;border-radius:4px;padding:4px;font-weight:bold;}}
-            QTabWidget::pane{{border:1px solid {GRID};background:#0E1320;}}
-            QTabBar::tab{{background:#13192B;color:#9AA5B1;border:1px solid {GRID};
-                padding:8px 14px;font-weight:bold;}}
-            QTabBar::tab:selected{{background:#1B2642;color:{CYAN};
-                border-bottom:2px solid {CYAN};}}
-            QTableWidget{{background:#0D111C;alternate-background-color:#131929;
-                gridline-color:#222B42;color:{TXT};selection-background-color:#263859;}}
-            QHeaderView::section{{background:#161F33;color:{CYAN};border:1px solid {GRID};
-                padding:5px;font-weight:bold;}}
-            QTextEdit{{background:#090C14;color:#C9D6E3;border:1px solid {GRID};
-                border-radius:4px;}}
-            QScrollArea{{border:none;}}
+            QMainWindow, QWidget {{
+                background: {BG}; color: {TXT};
+                font-family: 'Menlo', 'Consolas', 'Courier New', monospace;
+                font-size: 12px;
+            }}
+            QGroupBox {{
+                background: #111625; border: 1px solid {GRID}; border-radius: 6px;
+                margin-top: 10px; padding-top: 10px; font-weight: bold; color: {CYAN};
+            }}
+            QGroupBox::title {{ subcontrol-origin: margin; left: 10px; padding: 0 6px; }}
+            QPushButton {{
+                background: #19223A; color: {CYAN}; border: 1px solid {CYAN};
+                border-radius: 4px; padding: 5px 9px; font-weight: bold;
+            }}
+            QPushButton:hover {{ background: {CYAN}; color: {BG}; }}
+            QPushButton#gold {{ background: #2B2108; color: {AMBER}; border: 1px solid {AMBER}; }}
+            QPushButton#gold:hover {{ background: {AMBER}; color: {BG}; }}
+            QPushButton#pink {{ background: #2A1228; color: {PINK}; border: 1px solid {PINK}; }}
+            QPushButton#pink:hover {{ background: {PINK}; color: {BG}; }}
+            QPushButton#green {{ background: #0E291D; color: {GREEN}; border: 1px solid {GREEN}; }}
+            QPushButton#green:hover {{ background: {GREEN}; color: {BG}; }}
+            QSpinBox, QComboBox, QLineEdit {{
+                background: #0D121F; color: {AMBER};
+                border: 1px solid #2E3D61; border-radius: 4px; padding: 4px; font-weight: bold;
+            }}
+            QTabWidget::pane {{ border: 1px solid {GRID}; background: #0E1320; }}
+            QTabBar::tab {{
+                background: #13192B; color: #9AA5B1; border: 1px solid {GRID};
+                padding: 8px 12px; font-weight: bold;
+            }}
+            QTabBar::tab:selected {{
+                background: #1B2642; color: {CYAN}; border-bottom: 2px solid {CYAN};
+            }}
+            QTableWidget {{
+                background: #0D111C; alternate-background-color: #131929;
+                gridline-color: #222B42; color: {TXT}; selection-background-color: #263859;
+            }}
+            QHeaderView::section {{
+                background: #161F33; color: {CYAN}; border: 1px solid {GRID};
+                padding: 5px; font-weight: bold;
+            }}
+            QTextEdit {{
+                background: #090C14; color: #C9D6E3; border: 1px solid {GRID}; border-radius: 4px;
+            }}
+            QScrollArea {{ border: none; background: {BG}; }}
+            QScrollBar:vertical {{
+                background: #0D121F; width: 11px; margin: 0px; border-radius: 5px;
+            }}
+            QScrollBar::handle:vertical {{
+                background: #2B3B5E; min-height: 28px; border-radius: 5px;
+            }}
+            QScrollBar::handle:vertical:hover {{ background: {CYAN}; }}
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0px; }}
+            QScrollBar:horizontal {{
+                background: #0D121F; height: 11px; margin: 0px; border-radius: 5px;
+            }}
+            QScrollBar::handle:horizontal {{
+                background: #2B3B5E; min-width: 28px; border-radius: 5px;
+            }}
+            QScrollBar::handle:horizontal:hover {{ background: {CYAN}; }}
+            QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {{ width: 0px; }}
+            QStatusBar {{
+                background: #11182B; color: {CYAN}; border-top: 1px solid {GRID}; font-weight: bold;
+            }}
             """)
+
+        def _wrap_canvas_tab(self, fig: Figure, min_w: int, min_h: int,
+                             extra_bar_widgets: Optional[List[QWidget]] = None) -> Tuple[QWidget, FigureCanvas]:
+            """Wraps a Matplotlib Figure with NavigationToolbar (if available) + optional controls + Dark ScrollArea."""
+            container = QWidget()
+            vbox = QVBoxLayout(container)
+            vbox.setContentsMargins(2, 2, 2, 2)
+            vbox.setSpacing(2)
+
+            canvas = FigureCanvas(fig)
+            canvas.setMinimumSize(min_w, min_h)
+            canvas.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+
+            top_strip = QHBoxLayout()
+            top_strip.setContentsMargins(4, 2, 4, 2)
+            if HAS_NAV_TOOLBAR:
+                toolbar = NavigationToolbar(canvas, container)
+                toolbar.setStyleSheet(
+                    f"QToolBar {{ background: #11182B; border: none; spacing: 4px; }}"
+                    f"QToolButton {{ background: #19223A; color: {CYAN}; border: 1px solid {GRID}; border-radius: 3px; }}"
+                    f"QToolButton:hover {{ background: {CYAN}; color: {BG}; }}"
+                )
+                top_strip.addWidget(toolbar, 1)
+            if extra_bar_widgets:
+                for w in extra_bar_widgets:
+                    top_strip.addWidget(w)
+            if HAS_NAV_TOOLBAR or extra_bar_widgets:
+                vbox.addLayout(top_strip)
+
+            sa = QScrollArea()
+            sa.setWidgetResizable(True)
+            sa.setWidget(canvas)
+            vbox.addWidget(sa, 1)
+            return container, canvas
 
         def _build(self):
             central = QWidget(); self.setCentralWidget(central)
             root = QVBoxLayout(central)
-            root.setContentsMargins(8, 8, 8, 8); root.setSpacing(6)
+            root.setContentsMargins(6, 6, 6, 4); root.setSpacing(6)
+
+            self.status = QStatusBar()
+            self.setStatusBar(self.status)
+            self.status.showMessage(
+                f"IT3-WavePixel v{VERSION} Interactive GUI Ready  |  F11 = Fullscreen  |  "
+                f"Click HUD chart to jump steps, click 172-Matrix cells to inspect F(Z), use Tab 7 to stress-test proofs!"
+            )
+
+            # Top Banner
             banner = QFrame()
-            banner.setStyleSheet(f"background:#11182B;border:1px solid {CYAN};"
-                                 f"border-radius:6px;padding:6px;")
+            banner.setStyleSheet(
+                f"background:#11182B; border:1px solid {CYAN}; border-radius:6px; padding:4px;"
+            )
             bl = QHBoxLayout(banner)
-            lbl = QLabel("IT3-WAVEPIXEL v3.1  |  M_tot = S4 x T3 over K=Q(sqrt2,sqrt3,sqrt5)"
-                         "  |  ROM 0xE100 = 57600 = 240^2  |  Kummer wall sqrt(13) not in K"
-                         "  |  ledger: self-counting")
-            lbl.setStyleSheet(f"color:{CYAN};font-weight:bold;border:none;")
-            bl.addWidget(lbl)
-            for t, f in (("Export tab PNG", self.export_png),
-                         ("Export audit CSV", self.export_csv),
-                         ("Export ledger JSON", self.export_ledger)):
+            bl.setContentsMargins(8, 4, 8, 4)
+            lbl = QLabel(
+                f"⚡ IT3-WAVEPIXEL v{VERSION}  |  Victor Logvinovich & Jean-Claude Perez  |  "
+                f"M_tot = S⁴ × T³ over K = Q(√2,√3,√5)  |  ROM 0xE100  |  Wall √13 ∉ K"
+            )
+            lbl.setStyleSheet(f"color:{CYAN}; font-weight:bold; border:none;")
+            lbl.setWordWrap(True)
+            bl.addWidget(lbl, 1)
+
+            self.b_full = QPushButton("⛶ Fullscreen (F11)")
+            self.b_full.setObjectName("green")
+            self.b_full.clicked.connect(self.toggle_fullscreen)
+            bl.addWidget(self.b_full)
+
+            for t, f in (("🎬 Export GIF", self.export_gif),
+                         ("💾 Tab PNG", self.export_png),
+                         ("📄 Audit CSV", self.export_csv),
+                         ("🔐 Ledger JSON", self.export_ledger)):
                 b = QPushButton(t); b.clicked.connect(f); bl.addWidget(b)
             root.addWidget(banner)
-            split = QSplitter(Qt.Orientation.Horizontal); root.addWidget(split, 1)
-            left = QWidget(); lv = QVBoxLayout(left)
-            lv.setContentsMargins(4, 4, 4, 4); lv.setSpacing(6)
 
+            # Main Horizontal Splitter
+            split = QSplitter(Qt.Orientation.Horizontal); root.addWidget(split, 1)
+
+            # LEFT DOCK IN QSCROLLAREA
+            left_scroll = QScrollArea()
+            left_scroll.setWidgetResizable(True)
+            left_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+            left_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+            left_scroll.setMinimumWidth(420)
+
+            left = QWidget(); lv = QVBoxLayout(left)
+            lv.setContentsMargins(4, 4, 8, 8); lv.setSpacing(6)
+
+            # 1. Cascade Input
             g1 = QGroupBox("1. CASCADE INPUT"); q1 = QGridLayout(g1)
             self.preset = QComboBox()
             self.preset.addItems([
                 "Even rail: 298Ubn (120 -> 82)", "Odd rail: 297Uue (119 -> 81)",
                 "294Og pure alpha (118 -> 82)", "293Ts pure alpha (117 -> 83)",
-                "282Cn (112 -> 82)", "250Cm f-cavity (96 -> 82)",
+                "282Cn bottleneck (112 -> 82)", "250Cm f-cavity (96 -> 82)",
                 "Ceiling: 426E172 (172 -> 82)", "238U (92 -> 82; 206Pb needs beta-)"])
             self.preset.currentIndexChanged.connect(self.on_preset)
             q1.addWidget(QLabel("Preset:"), 0, 0); q1.addWidget(self.preset, 0, 1, 1, 3)
@@ -1509,18 +1982,19 @@ if HAS_PYQT:
             q1.addWidget(QLabel("Start Z:"), 1, 0); q1.addWidget(self.sz, 1, 1)
             q1.addWidget(QLabel("Mass A:"), 1, 2); q1.addWidget(self.sa, 1, 3)
             q1.addWidget(QLabel("Stop Z:"), 2, 0); q1.addWidget(self.ss, 2, 1)
-            run = QPushButton("COMPUTE CASCADE"); run.clicked.connect(self.recompute)
+            run = QPushButton("▶ COMPUTE CASCADE"); run.clicked.connect(self.recompute)
             q1.addWidget(run, 2, 2, 1, 2)
             lv.addWidget(g1)
 
+            # 2. Transmutation Lab
             g2 = QGroupBox("2. TRANSMUTATION LAB"); q2 = QGridLayout(g2)
             self.src = QLineEdit("208Pb"); self.src.setPlaceholderText("208Pb | Pb-208 | 82,208")
             self.dst = QLineEdit("197Au"); self.dst.setPlaceholderText("197Au | Au-197 | 79,197")
             q2.addWidget(QLabel("Source:"), 0, 0); q2.addWidget(self.src, 0, 1)
             q2.addWidget(QLabel("Target:"), 0, 2); q2.addWidget(self.dst, 0, 3)
-            bt = QPushButton("TRANSMUTE"); bt.setObjectName("gold")
+            bt = QPushButton("⚡ TRANSMUTE"); bt.setObjectName("gold")
             bt.clicked.connect(self.transmute)
-            bl2 = QPushButton("Load path into HUD"); bl2.clicked.connect(self.load_path)
+            bl2 = QPushButton("Load path -> HUD"); bl2.clicked.connect(self.load_path)
             q2.addWidget(bt, 1, 0, 1, 2); q2.addWidget(bl2, 1, 2, 1, 2)
             hq = QHBoxLayout()
             for t, s, d in (("208Pb->197Au", "208Pb", "197Au"),
@@ -1533,32 +2007,46 @@ if HAS_PYQT:
             q2.addLayout(hq, 2, 0, 1, 4)
             lv.addWidget(g2)
 
-            g3 = QGroupBox("3. SCRUBBER & RAIL SWITCH"); v3 = QVBoxLayout(g3)
+            # 3. Scrubber, Animation Speed & Rail Switch
+            g3 = QGroupBox("3. SCRUBBER, ANIMATION & EC/β⁺ RAIL SWITCH"); v3 = QVBoxLayout(g3)
             hb = QHBoxLayout()
-            for t, f in (("Prev", self.prev), ("Animate", self.play), ("Next", self.next)):
+            for t, f in (("⏮ Prev", self.prev), ("▶ Animate", self.play), ("Next ⏭", self.next)):
                 b = QPushButton(t); b.clicked.connect(f); hb.addWidget(b)
-                if t == "Animate":
+                if "Animate" in t:
                     self.b_play = b
             v3.addLayout(hb)
             self.slider = QSlider(Qt.Orientation.Horizontal); self.slider.setMinimum(0)
             self.slider.valueChanged.connect(self.on_slider)
             v3.addWidget(self.slider)
+
+            h_spd = QHBoxLayout()
+            self.lbl_speed = QLabel("Speed: 650 ms")
+            self.speed_slider = QSlider(Qt.Orientation.Horizontal)
+            self.speed_slider.setRange(150, 1500)
+            self.speed_slider.setValue(650)
+            self.speed_slider.valueChanged.connect(self._on_speed_changed)
+            h_spd.addWidget(self.lbl_speed)
+            h_spd.addWidget(self.speed_slider, 1)
+            v3.addLayout(h_spd)
+
             hb2 = QHBoxLayout()
-            b_ec = QPushButton("Toggle EC at Z"); b_ec.setObjectName("pink")
+            b_ec = QPushButton("⚡ Toggle EC at Z"); b_ec.setObjectName("pink")
             b_ec.clicked.connect(self.toggle_ec)
-            b_cl = QPushButton("Reset pure alpha"); b_cl.clicked.connect(self.clear_ec)
+            b_cl = QPushButton("Reset pure α"); b_cl.clicked.connect(self.clear_ec)
             hb2.addWidget(b_ec); hb2.addWidget(b_cl)
             v3.addLayout(hb2)
             lv.addWidget(g3)
 
-            g4 = QGroupBox("4. REGISTER INSPECTOR (Z,N,M)"); v4 = QVBoxLayout(g4)
+            # 4. Register Inspector
+            g4 = QGroupBox("4. THREE-REGISTER INSPECTOR (Z, N, M)"); v4 = QVBoxLayout(g4)
             self.tele = QTextEdit(); self.tele.setReadOnly(True); self.tele.setMinimumHeight(230)
-            v4.addWidget(self.tele); lv.addWidget(g4, 1)
+            v4.addWidget(self.tele); lv.addWidget(g4)
 
-            g5 = QGroupBox("5. ELEMENTARY CHANNELS"); v5 = QVBoxLayout(g5)
+            # 5. Elementary Channels
+            g5 = QGroupBox("5. ELEMENTARY HW/SW CHANNELS"); v5 = QVBoxLayout(g5)
             gc = QGridLayout()
-            for i, (t, c) in enumerate([("alpha (-2p,-2n)", "alpha"),
-                                        ("beta- (n->p)", "beta_minus"),
+            for i, (t, c) in enumerate([("α (-2p,-2n)", "alpha"),
+                                        ("β⁻ (n->p)", "beta_minus"),
                                         ("EC (p+e->n)", "ec"),
                                         ("Pb->Au (-3p,-8n)", "pb_au"),
                                         ("UPC 1n knockout", "upc_n"),
@@ -1567,20 +2055,47 @@ if HAS_PYQT:
                 b.clicked.connect(lambda _, c=c: self.channel(c))
                 gc.addWidget(b, i // 2, i % 2)
             v5.addLayout(gc)
-            self.out = QTextEdit(); self.out.setReadOnly(True); self.out.setMaximumHeight(130)
+            self.out = QTextEdit(); self.out.setReadOnly(True); self.out.setMinimumHeight(130)
             v5.addWidget(self.out); lv.addWidget(g5)
-            split.addWidget(left)
+            lv.addStretch(1)
 
-            self.tabs = QTabWidget(); split.addWidget(self.tabs); split.setSizes([520, 1200])
-            self.f_hud = Figure(figsize=(12, 8.6), dpi=100, facecolor=BG)
-            self.c_hud = FigureCanvas(self.f_hud)
-            self.tabs.addTab(self.c_hud, "1. HUD telemetry")
-            self.f_mat = Figure(figsize=(15, 9.4), dpi=100, facecolor=BG)
-            self.c_mat = FigureCanvas(self.f_mat)
-            self.c_mat.setMinimumSize(1300, 830)
-            sa = QScrollArea(); sa.setWidgetResizable(True); sa.setWidget(self.c_mat)
-            self.tabs.addTab(sa, "2. 172-layer matrix")
+            left_scroll.setWidget(left)
+            split.addWidget(left_scroll)
+
+            # RIGHT WORKSPACE: 7 TABS
+            self.tabs = QTabWidget(); split.addWidget(self.tabs)
+            split.setStretchFactor(0, 0)
+            split.setStretchFactor(1, 1)
+            split.setSizes([465, 1260])
+
+            # Tab 1: HUD Telemetry (Click-to-jump + Scrollable + Toolbar)
+            self.f_hud = Figure(figsize=(13.5, 9.2), dpi=100, facecolor=BG)
+            t1, self.c_hud = self._wrap_canvas_tab(self.f_hud, 1100, 780)
+            self.c_hud.mpl_connect("button_press_event", self.on_hud_click)
+            self.tabs.addTab(t1, "📊 1. HUD Telemetry")
+
+            # Tab 2: 172-Layer Matrix (Interactive Cell Click + Launch button)
+            self.b_launch_sel = QPushButton("▶ Launch Cascade from Clicked Z")
+            self.b_launch_sel.setObjectName("gold")
+            self.b_launch_sel.clicked.connect(self.launch_from_selected_matrix_z)
+            self.f_mat = Figure(figsize=(15.0, 9.4), dpi=100, facecolor=BG)
+            t2, self.c_mat = self._wrap_canvas_tab(self.f_mat, 1280, 820, [self.b_launch_sel])
+            self.c_mat.mpl_connect("button_press_event", self.on_matrix_click)
+            self.tabs.addTab(t2, "⏳ 2. 172-Layer Matrix")
+
+            # Tab 3: Binary Audit Table + Filter + Copy Markdown
             tw = QWidget(); tv = QVBoxLayout(tw)
+            h_tbl = QHBoxLayout()
+            self.tbl_filter = QLineEdit()
+            self.tbl_filter.setPlaceholderText("Filter rows (e.g. 'TFI=4', 'DIODE', 'SF WALL', 'F-CAVITY', 'Cn')...")
+            self.tbl_filter.textChanged.connect(self._filter_audit_table)
+            b_copy_md = QPushButton("📋 Copy Markdown Table")
+            b_copy_md.clicked.connect(self.copy_audit_markdown)
+            h_tbl.addWidget(QLabel("Filter:"))
+            h_tbl.addWidget(self.tbl_filter, 1)
+            h_tbl.addWidget(b_copy_md)
+            tv.addLayout(h_tbl)
+
             self.table = QTableWidget(); self.table.setColumnCount(12)
             self.table.setHorizontalHeaderLabels(
                 ["Step", "Mode", "Transition", "Z old->new", "XOR", "TFI", "ATFI",
@@ -1590,13 +2105,487 @@ if HAS_PYQT:
                 QHeaderView.ResizeMode.ResizeToContents)
             self.table.horizontalHeader().setStretchLastSection(True)
             self.table.cellClicked.connect(self.on_row)
-            tv.addWidget(self.table); self.tabs.addTab(tw, "3. Binary audit table")
-            self.f_cern = Figure(figsize=(15, 10), dpi=100, facecolor=BG)
-            self.c_cern = FigureCanvas(self.f_cern)
-            self.c_cern.setMinimumSize(1300, 880)
-            sa2 = QScrollArea(); sa2.setWidgetResizable(True); sa2.setWidget(self.c_cern)
-            self.tabs.addTab(sa2, "4. Transmutation & mask lab")
+            tv.addWidget(self.table); self.tabs.addTab(tw, "🔢 3. Binary Audit Table")
 
+            # Tab 4: Transmutation & Mask Lab
+            self.f_cern = Figure(figsize=(15.0, 10.0), dpi=100, facecolor=BG)
+            t4, self.c_cern = self._wrap_canvas_tab(self.f_cern, 1280, 860)
+            self.tabs.addTab(t4, "⚛️ 4. Transmutation Lab")
+
+            # Tab 5: Dual-Rail Comparator & Radix Diode Lab
+            self.f_dual = Figure(figsize=(14.5, 9.6), dpi=100, facecolor=BG)
+            t5, self.c_dual = self._wrap_canvas_tab(self.f_dual, 1200, 820)
+            self.tabs.addTab(t5, "🚂 5. Dual-Rail & Diode Lab")
+
+            # Tab 6: Vacuum ROM 0xE100, Fano Compiler, Chemical Hop & Torus Spectrum Lab
+            t6 = self._build_rom_compiler_tab()
+            self.tabs.addTab(t6, "🧬 6. ROM, Compiler & Optics")
+
+            # Tab 7 (NEW): Dedicated Self-Verification Ledger & Skeptic "Try-to-Break-It" Sandbox
+            t7 = self._build_verification_sandbox_tab()
+            self.tabs.addTab(t7, "🛡️ 7. Self-Verify & Sandbox")
+
+        def _build_rom_compiler_tab(self) -> QWidget:
+            scroll = QScrollArea(); scroll.setWidgetResizable(True)
+            page = QWidget(); lay = QVBoxLayout(page)
+            lay.setContentsMargins(8, 8, 8, 8); lay.setSpacing(8)
+
+            self.f_rom = Figure(figsize=(14.0, 5.1), dpi=100, facecolor=BG)
+            self.c_rom = FigureCanvas(self.f_rom)
+            self.c_rom.setMinimumSize(1100, 390)
+            render_rom_figure(self.f_rom); self.c_rom.draw()
+            lay.addWidget(self.c_rom)
+
+            # Row 1: Fano Compiler + Closure/Hop Lab
+            mid = QHBoxLayout()
+
+            g_comp = QGroupBox("1. FANO-WEEK SQUARECLASS COMPILER  [K = Q(√2, √3, √5) | Wall √13 ∉ K]")
+            gc = QGridLayout(g_comp)
+            self.comp_n1 = QSpinBox(); self.comp_n1.setRange(1, 100000); self.comp_n1.setValue(12)
+            self.comp_n2 = QSpinBox(); self.comp_n2.setRange(1, 100000); self.comp_n2.setValue(15)
+            gc.addWidget(QLabel("√n₁:"), 0, 0); gc.addWidget(self.comp_n1, 0, 1)
+            gc.addWidget(QLabel("√n₂:"), 0, 2); gc.addWidget(self.comp_n2, 0, 3)
+            b_comp = QPushButton("Compile & XOR"); b_comp.setObjectName("gold")
+            b_comp.clicked.connect(self.run_compiler_ui)
+            gc.addWidget(b_comp, 0, 4)
+            hb_q = QHBoxLayout()
+            for lbl_q, av, bv in (("√8 · √12", 8, 12), ("√13 WALL!", 13, 2),
+                                  ("√15 · √30 (Legal)", 15, 30), ("√172 vs √173", 172, 173)):
+                bq = QPushButton(lbl_q)
+                bq.clicked.connect(lambda _, a=av, b=bv: self._set_comp(a, b))
+                hb_q.addWidget(bq)
+            gc.addLayout(hb_q, 1, 0, 1, 5)
+            self.comp_out = QTextEdit(); self.comp_out.setReadOnly(True); self.comp_out.setMinimumHeight(140)
+            gc.addWidget(self.comp_out, 2, 0, 1, 5)
+            mid.addWidget(g_comp, 1)
+
+            g_chem = QGroupBox("2. IONIC CLOSURE REPAIR & 1e⁻ SPECTRAL HOP XOR-DIFF")
+            gch = QGridLayout(g_chem)
+            self.chem_za = QSpinBox(); self.chem_za.setRange(1, 172); self.chem_za.setValue(11)
+            self.chem_zb = QSpinBox(); self.chem_zb.setRange(1, 172); self.chem_zb.setValue(17)
+            self.hop_i = QSpinBox(); self.hop_i.setRange(0, 171); self.hop_i.setValue(0)
+            self.hop_j = QSpinBox(); self.hop_j.setRange(0, 171); self.hop_j.setValue(15)
+            gch.addWidget(QLabel("Atom A (Z):"), 0, 0); gch.addWidget(self.chem_za, 0, 1)
+            gch.addWidget(QLabel("Atom B (Z):"), 0, 2); gch.addWidget(self.chem_zb, 0, 3)
+            b_chem = QPushButton("Run Bond/Hop"); b_chem.clicked.connect(self.run_chem_hop_ui)
+            gch.addWidget(b_chem, 0, 4)
+            gch.addWidget(QLabel("Hop src bit i:"), 1, 0); gch.addWidget(self.hop_i, 1, 1)
+            gch.addWidget(QLabel("Hop dst bit j:"), 1, 2); gch.addWidget(self.hop_j, 1, 3)
+            hb_c = QHBoxLayout()
+            for lbl_c, za, zb in (("NaCl", 11, 17), ("MgO", 12, 8), ("LiF", 3, 9), ("KBr", 19, 35)):
+                bc = QPushButton(lbl_c)
+                bc.clicked.connect(lambda _, a=za, b=zb: self._set_chem(a, b))
+                hb_c.addWidget(bc)
+            gch.addLayout(hb_c, 1, 4)
+            self.chem_out = QTextEdit(); self.chem_out.setReadOnly(True); self.chem_out.setMinimumHeight(140)
+            gch.addWidget(self.chem_out, 2, 0, 1, 5)
+            mid.addWidget(g_chem, 1)
+            lay.addLayout(mid)
+
+            # Row 2: Interactive Torus Mode & Wilson Holonomy Calculator
+            g_tor = QGroupBox("3. DISCRETE T³(1, √2, √3) PHOTON SPECTRUM & WILSON HOLONOMY CALCULATOR")
+            gt = QGridLayout(g_tor)
+            self.tn1 = QSpinBox(); self.tn1.setRange(-20, 20); self.tn1.setValue(0)
+            self.tn2 = QSpinBox(); self.tn2.setRange(-20, 20); self.tn2.setValue(0)
+            self.tn3 = QSpinBox(); self.tn3.setRange(-20, 20); self.tn3.setValue(1)
+            self.tm1 = QSpinBox(); self.tm1.setRange(-20, 20); self.tm1.setValue(1)
+            self.tm2 = QSpinBox(); self.tm2.setRange(-20, 20); self.tm2.setValue(2)
+            self.tm3 = QSpinBox(); self.tm3.setRange(-20, 20); self.tm3.setValue(3)
+            gt.addWidget(QLabel("Mode (n₁, n₂, n₃):"), 0, 0)
+            gt.addWidget(self.tn1, 0, 1); gt.addWidget(self.tn2, 0, 2); gt.addWidget(self.tn3, 0, 3)
+            gt.addWidget(QLabel("Cycle (m₁, m₂, m₃):"), 0, 4)
+            gt.addWidget(self.tm1, 0, 5); gt.addWidget(self.tm2, 0, 6); gt.addWidget(self.tm3, 0, 7)
+            b_tor = QPushButton("Compute T³ Spectrum"); b_tor.setObjectName("green")
+            b_tor.clicked.connect(self.run_torus_mode_ui)
+            gt.addWidget(b_tor, 0, 8)
+            for idx_b, (t_lbl, m_tup) in enumerate([("H₂ Ground (0,0,1)", (0, 0, 1)),
+                                                    ("Planar (0,1,0)", (0, 1, 0)),
+                                                    ("Scalar (1,0,0)", (1, 0, 0)),
+                                                    ("Audit (2,1,3)", (2, 1, 3))]):
+                bt = QPushButton(t_lbl)
+                bt.clicked.connect(lambda _, mt=m_tup: self._set_torus(mt))
+                gt.addWidget(bt, 1, idx_b * 2, 1, 2)
+            self.tor_out = QTextEdit(); self.tor_out.setReadOnly(True); self.tor_out.setMinimumHeight(95)
+            gt.addWidget(self.tor_out, 2, 0, 1, 9)
+            lay.addWidget(g_tor)
+            lay.addStretch(1)
+
+            scroll.setWidget(page)
+            return scroll
+
+        def _build_verification_sandbox_tab(self) -> QWidget:
+            """Tab 7: Interactive Skeptic / Self-Verification Sandbox + Live Level-A Ledger."""
+            scroll = QScrollArea(); scroll.setWidgetResizable(True)
+            page = QWidget(); lay = QVBoxLayout(page)
+            lay.setContentsMargins(8, 8, 8, 8); lay.setSpacing(8)
+
+            # Top Row: 3 Interactive "Try to Break It" Sandboxes
+            top_row = QHBoxLayout()
+
+            # Sandbox A: Prime Triple Optimality Tester (Theorem 3.6)
+            g_p = QGroupBox("A. RANK-3 PRIME FIELD TESTER (Thm 3.6)")
+            gp = QGridLayout(g_p)
+            self.sp_p1 = QSpinBox(); self.sp_p1.setRange(2, 97); self.sp_p1.setValue(2)
+            self.sp_p2 = QSpinBox(); self.sp_p2.setRange(2, 97); self.sp_p2.setValue(3)
+            self.sp_p3 = QSpinBox(); self.sp_p3.setRange(2, 97); self.sp_p3.setValue(5)
+            gp.addWidget(QLabel("Primes (p₁,p₂,p₃):"), 0, 0)
+            gp.addWidget(self.sp_p1, 0, 1); gp.addWidget(self.sp_p2, 0, 2); gp.addWidget(self.sp_p3, 0, 3)
+            b_pt = QPushButton("Test Cascade"); b_pt.setObjectName("gold")
+            b_pt.clicked.connect(self.run_prime_triple_test_ui)
+            gp.addWidget(b_pt, 1, 0, 1, 2)
+            b_try7 = QPushButton("Try (2,3,7)"); b_try7.clicked.connect(lambda: self._set_primes(2, 3, 7))
+            b_try235 = QPushButton("Try (2,3,5)"); b_try235.clicked.connect(lambda: self._set_primes(2, 3, 5))
+            gp.addWidget(b_try7, 1, 2); gp.addWidget(b_try235, 1, 3)
+            self.prime_out = QTextEdit(); self.prime_out.setReadOnly(True); self.prime_out.setMinimumHeight(130)
+            gp.addWidget(self.prime_out, 2, 0, 1, 4)
+            top_row.addWidget(g_p, 1)
+
+            # Sandbox B: Arbitrary-Base Diode & Nibble Borrow Verifier
+            g_r = QGroupBox("B. ARBITRARY-BASE DIODE & BORROW VERIFIER")
+            gr = QGridLayout(g_r)
+            self.sb_base = QSpinBox(); self.sb_base.setRange(2, 36); self.sb_base.setValue(2)
+            self.sb_clos = QSpinBox(); self.sb_clos.setRange(6, 170); self.sb_clos.setValue(86)
+            gr.addWidget(QLabel("Radix Base b:"), 0, 0); gr.addWidget(self.sb_base, 0, 1)
+            gr.addWidget(QLabel("Closure E:"), 0, 2); gr.addWidget(self.sb_clos, 0, 3)
+            b_rd = QPushButton("Verify Base b"); b_rd.clicked.connect(self.run_radix_sandbox_ui)
+            gr.addWidget(b_rd, 1, 0, 1, 2)
+            b_b2 = QPushButton("Base 2"); b_b2.clicked.connect(lambda: self._set_radix(2, 86))
+            b_b3 = QPushButton("Base 3"); b_b3.clicked.connect(lambda: self._set_radix(3, 86))
+            gr.addWidget(b_b2, 1, 2); gr.addWidget(b_b3, 1, 3)
+            self.radix_out = QTextEdit(); self.radix_out.setReadOnly(True); self.radix_out.setMinimumHeight(130)
+            gr.addWidget(self.radix_out, 2, 0, 1, 4)
+            top_row.addWidget(g_r, 1)
+
+            # Sandbox C: Interactive Numerology Firewall Scanner
+            g_fw = QGroupBox("C. INTERACTIVE NUMEROLOGY FIREWALL")
+            gfw = QGridLayout(g_fw)
+            self.sb_fw_target = QSpinBox(); self.sb_fw_target.setRange(1, 2000); self.sb_fw_target.setValue(137)
+            gfw.addWidget(QLabel("Target integer:"), 0, 0); gfw.addWidget(self.sb_fw_target, 0, 1)
+            b_fw = QPushButton("Scan Pool Hits"); b_fw.setObjectName("pink")
+            b_fw.clicked.connect(self.run_firewall_sandbox_ui)
+            gfw.addWidget(b_fw, 0, 2, 1, 2)
+            for idx_fw, val_t in enumerate((137, 139, 143, 172)):
+                bf = QPushButton(str(val_t))
+                bf.clicked.connect(lambda _, v=val_t: self._set_fw_target(v))
+                gfw.addWidget(bf, 1, idx_fw)
+            self.fw_out = QTextEdit(); self.fw_out.setReadOnly(True); self.fw_out.setMinimumHeight(130)
+            gfw.addWidget(self.fw_out, 2, 0, 1, 4)
+            top_row.addWidget(g_fw, 1)
+
+            lay.addLayout(top_row)
+
+            # Bottom Panel: Full Self-Counting Runtime Level-A Verification Ledger
+            g_led = QGroupBox("LIVE RUNTIME LEVEL-A VERIFICATION LEDGER (SELF-COUNTING, SHA-256 SEALED)")
+            vl = QVBoxLayout(g_led)
+            hl = QHBoxLayout()
+            self.ledger_summary = QLabel("Computing ledger...")
+            self.ledger_summary.setStyleSheet(f"color:{GREEN}; font-weight:bold;")
+            hl.addWidget(self.ledger_summary, 1)
+            b_rerun = QPushButton("🔄 Re-run All 26 Proofs Now")
+            b_rerun.setObjectName("green")
+            b_rerun.clicked.connect(self.populate_ledger_tab)
+            hl.addWidget(b_rerun)
+            b_save_j = QPushButton("💾 Save Ledger JSON")
+            b_save_j.clicked.connect(self.export_ledger)
+            hl.addWidget(b_save_j)
+            vl.addLayout(hl)
+
+            self.ledger_table = QTableWidget()
+            self.ledger_table.setColumnCount(4)
+            self.ledger_table.setHorizontalHeaderLabels(["Level", "Status", "Theorem / Regression Guard", "Runtime Detail"])
+            self.ledger_table.setAlternatingRowColors(True)
+            self.ledger_table.setMinimumHeight(420)
+            self.ledger_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
+            self.ledger_table.horizontalHeader().setStretchLastSection(True)
+            vl.addWidget(self.ledger_table)
+            lay.addWidget(g_led)
+
+            scroll.setWidget(page)
+            return scroll
+
+        # --------------------------------------------------------------------
+        # WINDOW / FULLSCREEN / SPEED CONTROLS
+        # --------------------------------------------------------------------
+        def toggle_fullscreen(self):
+            if self.isFullScreen():
+                self.showMaximized()
+                self.b_full.setText("⛶ Fullscreen (F11)")
+            else:
+                self.showFullScreen()
+                self.b_full.setText("🗗 Exit Fullscreen (Esc)")
+
+        def _exit_fullscreen_if_active(self):
+            if self.isFullScreen():
+                self.showMaximized()
+                self.b_full.setText("⛶ Fullscreen (F11)")
+
+        def _on_speed_changed(self, ms: int):
+            self.lbl_speed.setText(f"Speed: {ms} ms")
+            self.timer.setInterval(ms)
+
+        # --------------------------------------------------------------------
+        # INTERACTIVE CHART CLICKS (TAB 1 HUD & TAB 2 MATRIX)
+        # --------------------------------------------------------------------
+        def on_hud_click(self, event):
+            if not self.records or event.inaxes is None or event.xdata is None:
+                return
+            if self.hud_axes and event.inaxes in self.hud_axes:
+                z_clicked = event.xdata
+                best_i = min(range(len(self.records)),
+                             key=lambda i: abs(self.records[i].z_daughter - z_clicked))
+                self.slider.setValue(best_i)
+                r = self.records[best_i]
+                self.status.showMessage(
+                    f"Jumped to Step {r.step_idx}: {r.a_parent}{WPM.get_symbol(r.z_parent)} -> "
+                    f"{r.a_daughter}{WPM.get_symbol(r.z_daughter)} (TFI={r.tfi}, ATFI={r.atfi:.2f})"
+                )
+
+        def on_matrix_click(self, event):
+            if event.inaxes is None or event.xdata is None or event.ydata is None:
+                return
+            best_z, best_d = None, 1e9
+            for z, (xc, yc) in self.matrix_centers.items():
+                if abs(event.xdata - xc) <= CELL_W * 0.55 and abs(event.ydata - yc) <= CELL_H * 0.55:
+                    d = (event.xdata - xc) ** 2 + (event.ydata - yc) ** 2
+                    if d < best_d:
+                        best_d, best_z = d, z
+            if best_z is None:
+                return
+            self.selected_matrix_z = best_z
+            fz = WPM.facing_partner(best_z)
+            fl, blk, mu, mb = WPM.get_coordinates(best_z)
+            wn = WPM.nuclear_facing_word(best_z)
+            tfi_a = BinaryFrictionALU.compute_tfi(best_z, best_z - 2)[1] if best_z >= 3 else 0
+            self.b_launch_sel.setText(f"▶ Launch Cascade from {WPM.get_symbol(best_z)} (Z={best_z})")
+            msg = (f"Selected Z={best_z} {WPM.get_symbol(best_z)} ({WPM.get_name(best_z)}) | "
+                   f"Coord: |S{fl},{blk},{mu}> | 0x{best_z:02X} ({best_z:08b}₂) | "
+                   f"Mirror Partner F(Z)={fz} {WPM.get_symbol(fz)} | W_N=0x{wn:04X} | "
+                   f"Next α-TFI={tfi_a}")
+            self.status.showMessage(msg)
+            self.out.setHtml(
+                f"<span style='color:{CYAN};font-weight:bold;'>[MATRIX CELL INSPECTOR]</span><br>"
+                f"<b>{WPM.get_symbol(best_z)} (Z={best_z})</b> — {WPM.get_name(best_z)} | "
+                f"Coord: <code>|S{fl}, {blk}, μ={mu}⟩</code> (block pos {mb})<br>"
+                f"<b>Binary Address:</b> <code>0x{best_z:02X} ({best_z:08b}₂)</code> | "
+                f"<b>Closure Distance δ(Z):</b> {WPM.closure_distance(best_z)}<br>"
+                f"<b>Equatorial Mirror F(Z):</b> <span style='color:{AMBER};'><b>{WPM.get_symbol(fz)} (Z={fz})</b></span> | "
+                f"<b>16-bit Word W_N:</b> <code>0x{wn:04X}</code> (byte-swap: <code>0x{WPM.nuclear_facing_word(fz):04X}</code>)"
+            )
+            self.matrix_centers = render_matrix(self.f_mat, self.records, self.idx, self.selected_matrix_z)
+            self.c_mat.draw()
+
+        def launch_from_selected_matrix_z(self):
+            z = self.selected_matrix_z or self.sz.value()
+            if z < 4:
+                QMessageBox.information(self, "Cascade Start", "Select an element with Z >= 4 to launch an alpha cascade.")
+                return
+            self.sz.setValue(z)
+            self.ec_switches.clear()
+            self.recompute()
+            self.tabs.setCurrentIndex(0)
+
+        # --------------------------------------------------------------------
+        # TAB 6 & TAB 7 INTERACTIVE VERIFIERS
+        # --------------------------------------------------------------------
+        def _set_comp(self, a: int, b: int):
+            self.comp_n1.setValue(a); self.comp_n2.setValue(b); self.run_compiler_ui()
+
+        def run_compiler_ui(self):
+            c1 = compile_radical(self.comp_n1.value())
+            c2 = compile_radical(self.comp_n2.value())
+            prod = self.comp_n1.value() * self.comp_n2.value()
+            cp = compile_radical(prod)
+            st1 = f"<span style='color:{GREEN};'>LEGAL (op={c1['opcode_bin']}₂)</span>" if c1["in_K"] else f"<span style='color:{PINK};'>KUMMER WALL HALT (sf={c1['d']} ∤ 30)</span>"
+            st2 = f"<span style='color:{GREEN};'>LEGAL (op={c2['opcode_bin']}₂)</span>" if c2["in_K"] else f"<span style='color:{PINK};'>KUMMER WALL HALT (sf={c2['d']} ∤ 30)</span>"
+            if c1["in_K"] and c2["in_K"]:
+                xor_op = c1["opcode"] ^ c2["opcode"]
+                xor_line = (f"<b>XOR Radical Multiplication:</b> op({c1['d']}) ⊕ op({c2['d']}) = "
+                            f"<code>{c1['opcode_bin']} ⊕ {c2['opcode_bin']} = {xor_op:03b}₂</code> "
+                            f"→ sf = <b>{WPM.OPCODE_TO_SF[xor_op]}</b> (compiled √{prod} = {cp['expr']})")
+            else:
+                xor_line = (f"<span style='color:{PINK};'><b>3-BIT OPCODE OVERFLOW:</b> "
+                            f"√{prod} has sf={cp['d']} ∉ {{1,2,3,5,6,10,15,30}} → outside K = Q(√2,√3,√5)</span>")
+            self.comp_out.setHtml(
+                f"<div style='font-family:Menlo,Consolas,monospace;font-size:11.5px;line-height:1.4;'>"
+                f"• <b>√{c1['n']} = {c1['expr']}</b> (sf={c1['d']}) → {st1}<br>"
+                f"• <b>√{c2['n']} = {c2['expr']}</b> (sf={c2['d']}) → {st2}<br>"
+                f"• {xor_line}<br>"
+                f"• <b>Squaring (Compilation):</b> (√{c1['n']})² = {c1['n']} → op = <code>000₂</code></div>"
+            )
+
+        def _set_chem(self, za: int, zb: int):
+            self.chem_za.setValue(za); self.chem_zb.setValue(zb)
+            self.hop_i.setValue(0); self.hop_j.setValue(min(171, za + 4))
+            self.run_chem_hop_ui()
+
+        def run_chem_hop_ui(self):
+            za, zb = self.chem_za.value(), self.chem_zb.value()
+            sa, sb = WPM.nearest_closure(za), WPM.nearest_closure(zb)
+            da, db = za - sa, zb - sb
+            repaired = (sa + sb == za + zb) and (sa != za or sb != zb)
+            m_a = WPM.mask_int(za)
+            hi, hj = self.hop_i.value(), self.hop_j.value()
+            try:
+                m_hop = hop_mask(m_a, hi, hj)
+                hop_msg = (f"<span style='color:{GREEN};'><b>VALID 1e⁻ HOP</b></span> (bit {hi} → bit {hj}): "
+                           f"wt(M)={wt(m_a)} → wt(M')={wt(m_hop)} | <b>XOR diff wt(M ⊕ M') = {wt(m_a ^ m_hop)}</b> (even, Thm 12.1 [A])")
+            except ValueError as e:
+                hop_msg = f"<span style='color:{PINK};'>Hop rejected: {e}</span>"
+
+            rep_txt = (
+                f"<span style='color:{GREEN};'><b>EXACT CLOSURE REPAIR!</b> ({za}, {zb}) → ({sa}, {sb}) "
+                f"[wt conserved: {za+zb} = {sa+sb}, Q_top = ({da:+d}, {db:+d}), sum = 0]</span>"
+                if repaired else
+                f"<span style='color:{AMBER};'>Nearest closures: {WPM.get_symbol(za)}({za})→{sa} (Δ={da:+d}), "
+                f"{WPM.get_symbol(zb)}({zb})→{sb} (Δ={db:+d}) | Net electron balance = {da+db:+d}</span>"
+            )
+            self.chem_out.setHtml(
+                f"<div style='font-family:Menlo,Consolas,monospace;font-size:11.5px;line-height:1.4;'>"
+                f"• <b>Pair:</b> {WPM.get_symbol(za)} (Z={za}, δ={WPM.closure_distance(za)}) + "
+                f"{WPM.get_symbol(zb)} (Z={zb}, δ={WPM.closure_distance(zb)})<br>"
+                f"• {rep_txt}<br>"
+                f"• {hop_msg}</div>"
+            )
+
+        def _set_torus(self, m_tup: Tuple[int, int, int]):
+            self.tn1.setValue(m_tup[0]); self.tn2.setValue(m_tup[1]); self.tn3.setValue(m_tup[2])
+            self.run_torus_mode_ui()
+
+        def run_torus_mode_ui(self):
+            mode = (self.tn1.value(), self.tn2.value(), self.tn3.value())
+            cyc = (self.tm1.value(), self.tm2.value(), self.tm3.value())
+            n2 = torus_mode_norm2(*mode)
+            hol = torus_holonomy(mode, cyc)
+            ry = 13.605693122994
+            e_ev = float(n2) * ry
+            self.tor_out.setHtml(
+                f"<div style='font-family:Menlo,Consolas,monospace;font-size:11.5px;line-height:1.4;'>"
+                f"• <b>Dual-Lattice Squared Norm [Level A]:</b> ||k||²/(2π)² = {mode[0]}² + {mode[1]}²/2 + {mode[2]}²/3 = "
+                f"<span style='color:{CYAN};'><b>{n2}</b></span> ({float(n2):.6f})<br>"
+                f"• <b>Wilson-Loop Integer Holonomy Pairing:</b> ⟨n, m⟩ = {mode}·{cyc} = <b>{hol}</b> → k·λ = 2π·({hol})<br>"
+                f"• <b>Toroidal Kinetic Scale [Level B]:</b> T(n) = Ry · ||k||²/(2π)² = "
+                f"<span style='color:{AMBER};'><b>{e_ev:.4f} eV</b></span> (for mode (0,0,1): Ry/3 = 4.5352 eV vs H₂ D₀ ≈ 4.478 eV, 1.3%)</div>"
+            )
+
+        def _set_primes(self, a: int, b: int, c: int):
+            self.sp_p1.setValue(a); self.sp_p2.setValue(b); self.sp_p3.setValue(c)
+            self.run_prime_triple_test_ui()
+
+        def run_prime_triple_test_ui(self):
+            p1, p2, p3 = self.sp_p1.value(), self.sp_p2.value(), self.sp_p3.value()
+            res = test_prime_triple_cascade(p1, p2, p3)
+            passed_str = ", ".join(f"x{i}={x}" for i, x, _ in res["passed"]) or "none"
+            fm = res["first_miss"]
+            miss_str = f"x{fm[0]} = {fm[1]} (sf={fm[2]} ∉ span)" if fm else "none"
+            is_opt = (len(res["passed"]) == 5)
+            verdict = (f"<span style='color:{GREEN};'><b>OPTIMAL RANK-3 FIELD!</b> Unique maximum length = 5 before Kummer Wall 13.</span>"
+                       if is_opt else
+                       f"<span style='color:{PINK};'><b>SUBOPTIMAL:</b> halts early at {miss_str} (length {len(res['passed'])} < 5).</span>")
+            self.prime_out.setHtml(
+                f"<div style='font-family:Menlo,Consolas,monospace;font-size:11.2px;line-height:1.35;'>"
+                f"• <b>Span Γ:</b> {res['span']}<br>"
+                f"• <b>Cascade terms constructed:</b> {passed_str}<br>"
+                f"• <b>First overflow:</b> {miss_str}<br>"
+                f"• {verdict}</div>"
+            )
+
+        def _set_radix(self, b: int, e: int):
+            self.sb_base.setValue(b); self.sb_clos.setValue(e)
+            self.run_radix_sandbox_ui()
+
+        def run_radix_sandbox_ui(self):
+            b = self.sb_base.value()
+            e = self.sb_clos.value()
+            ev_d = digit_diff(e + 2, e, b)
+            od_d = digit_diff(e + 1, e - 1, b)
+            bo, hi, qu = nibble_closed(172, b)
+            asym = ev_d - od_d
+            verdict = (f"<span style='color:{GREEN};'><b>DIODE ACTIVE (Δ = +{asym}):</b> Even rail pays higher borrow cost than Odd rail!</span>"
+                       if asym > 0 else
+                       f"<span style='color:{AMBER};'><b>NO EVEN BARRIER (Δ = {asym:+d}):</b> Diode vanishes or inverts in base {b}.</span>")
+            self.radix_out.setHtml(
+                f"<div style='font-family:Menlo,Consolas,monospace;font-size:11.2px;line-height:1.35;'>"
+                f"• <b>Closure E={e} in Base {b}:</b> Even ({e+2}→{e}) diffs = <b>{ev_d}</b> | Odd ({e+1}→{e-1}) diffs = <b>{od_d}</b><br>"
+                f"• {verdict}<br>"
+                f"• <b>Thm E Nibble Partition (N=172, base {b}):</b> borrow={bo}, high={hi}, quiet={qu} (sum={bo+hi+qu} = 172·173/2)</div>"
+            )
+
+        def _set_fw_target(self, val: int):
+            self.sb_fw_target.setValue(val)
+            self.run_firewall_sandbox_ui()
+
+        def run_firewall_sandbox_ui(self):
+            t = self.sb_fw_target.value()
+            hits = simple_hits(t)
+            sample = ", ".join(hits[:12]) + (" ..." if len(hits) > 12 else "")
+            cov = grammar_coverage()
+            self.fw_out.setHtml(
+                f"<div style='font-family:Menlo,Consolas,monospace;font-size:11.2px;line-height:1.35;'>"
+                f"• <b>Target {t} (0x{t:02X}):</b> found <span style='color:{AMBER};'><b>{len(hits)}</b></span> expressions (≤2 ops) from constant pool (target excluded)<br>"
+                f"• <b>Examples:</b> <code>{sample or 'NONE'}</code><br>"
+                f"• <b>Epistemic Rule:</b> Pool covers <b>{cov*100:.1f}%</b> of [2..256] → arithmetic identities are Level A, physical claims require Level B/O derivations!</div>"
+            )
+
+        def populate_ledger_tab(self):
+            L = build_ledger()
+            fw = firewall_report()
+            cov = grammar_coverage()
+            col = GREEN if L.n_pass == L.n else PINK
+            self.ledger_summary.setStyleSheet(f"color:{col}; font-weight:bold;")
+            self.ledger_summary.setText(
+                f"RUNTIME AUDIT: {L.n_pass}/{L.n} PASSED  |  SHA256: {L.digest()[:24]}...  |  "
+                f"Firewall [2..256] coverage={cov:.3f} (137 hits={fw[137]})"
+            )
+            self.ledger_table.setRowCount(len(L.rows))
+            for i, r in enumerate(L.rows):
+                vals = [r.level, "PASS" if r.passed else "FAIL", r.name, r.detail]
+                for c, v in enumerate(vals):
+                    it = QTableWidgetItem(v)
+                    it.setTextAlignment(Qt.AlignmentFlag.AlignCenter if c < 2 else Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+                    if not r.passed:
+                        it.setForeground(QColor(PINK))
+                    elif r.level == "REFUTED":
+                        it.setForeground(QColor(AMBER))
+                    elif c == 1:
+                        it.setForeground(QColor(GREEN))
+                    self.ledger_table.setItem(i, c, it)
+
+        # --------------------------------------------------------------------
+        # TABLE FILTER & MARKDOWN COPY (TAB 3)
+        # --------------------------------------------------------------------
+        def _filter_audit_table(self, query: str):
+            q = query.strip().lower()
+            for r in range(self.table.rowCount()):
+                if not q:
+                    self.table.setRowHidden(r, False)
+                    continue
+                row_txt = " ".join(
+                    self.table.item(r, c).text().lower()
+                    for c in range(self.table.columnCount())
+                    if self.table.item(r, c) is not None
+                )
+                self.table.setRowHidden(r, q not in row_txt)
+
+        def copy_audit_markdown(self):
+            if not self.records:
+                return
+            lines = [
+                "| Step | Mode | Transition | Z (8-bit) | XOR | TFI | ATFI | Daughter | W_N | Strain | ΔQ_top | Event |",
+                "| :---: | :---: | :--- | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :--- |"
+            ]
+            for r in self.records:
+                tr = f"{r.a_parent}{WPM.get_symbol(r.z_parent)} -> {r.a_daughter}{WPM.get_symbol(r.z_daughter)}"
+                lines.append(
+                    f"| {r.step_idx} | {r.mode} | {tr} | `{r.bin_parent}->{r.bin_daughter}` | "
+                    f"`0x{r.xor_mask:02X}` | {r.tfi} | {r.atfi:.2f} | {r.coord_daughter} | "
+                    f"`{r.facing_word_hex}` | {r.strain_after:.2f} | {r.q_top_unrelaxed:+d} | {r.event_tag} |"
+                )
+            QApplication.clipboard().setText("\n".join(lines))
+            self.status.showMessage("Copied Markdown audit table to clipboard!")
+
+        # --------------------------------------------------------------------
+        # CORE CASCADE & TRANSMUTATION HANDLERS
+        # --------------------------------------------------------------------
         def _pair(self, s, d):
             self.src.setText(s); self.dst.setText(d); self.transmute()
             self.tabs.setCurrentIndex(3)
@@ -1631,18 +2620,22 @@ if HAS_PYQT:
             self.slider.blockSignals(True)
             self.slider.setMaximum(max(0, len(self.records) - 1)); self.slider.setValue(0)
             self.slider.blockSignals(False)
-            self.fill_table(); self.refresh()
+            self.fill_table()
+            render_dual_rail(self.f_dual, z, s); self.c_dual.draw()
+            self.refresh()
 
         def refresh(self):
             if not self.records:
                 self.tele.setHtml(f"<b>HALT:</b> {self.halt_msg or 'no records'}")
-                render_hud(self.f_hud, [], 0); self.c_hud.draw()
-                render_matrix(self.f_mat, None, 0); self.c_mat.draw()
+                self.hud_axes = render_hud(self.f_hud, [], 0); self.c_hud.draw()
+                self.matrix_centers = render_matrix(self.f_mat, None, 0, self.selected_matrix_z)
+                self.c_mat.draw()
                 return
             self.idx = max(0, min(self.idx, len(self.records) - 1))
             self.telemetry(self.records[self.idx])
-            render_hud(self.f_hud, self.records, self.idx); self.c_hud.draw()
-            render_matrix(self.f_mat, self.records, self.idx); self.c_mat.draw()
+            self.hud_axes = render_hud(self.f_hud, self.records, self.idx); self.c_hud.draw()
+            self.matrix_centers = render_matrix(self.f_mat, self.records, self.idx, self.selected_matrix_z)
+            self.c_mat.draw()
             self.table.selectRow(self.idx)
 
         def on_slider(self, v):
@@ -1664,17 +2657,17 @@ if HAS_PYQT:
 
         def play(self):
             if self.timer.isActive():
-                self.timer.stop(); self.b_play.setText("Animate")
+                self.timer.stop(); self.b_play.setText("▶ Animate")
             else:
                 if self.idx >= len(self.records) - 1:
                     self.idx = 0
-                self.timer.start(); self.b_play.setText("Pause")
+                self.timer.start(); self.b_play.setText("⏸ Pause")
 
         def _advance(self):
             if self.idx < len(self.records) - 1:
                 self.next()
             else:
-                self.timer.stop(); self.b_play.setText("Animate")
+                self.timer.stop(); self.b_play.setText("▶ Animate")
 
         def toggle_ec(self):
             if not self.records:
@@ -1737,7 +2730,6 @@ if HAS_PYQT:
                 self.out.setHtml(f"<b>{title}</b><br><span style='color:{PINK};'>"
                                  f"PHYSICAL HALT: N={n0} insufficient (alpha needs N>=2).</span>")
                 return
-            a1 = z1 + n1
             mask, tfi = BinaryFrictionALU.compute_tfi(z0, z1)
             atfi, _ = BinaryFrictionALU.compute_atfi(z0, z1)
             self.out.setHtml(
@@ -1799,15 +2791,43 @@ if HAS_PYQT:
                         it.setForeground(QColor(PINK if c in (4, 5, 11) else AMBER))
                         f = it.font(); f.setBold(True); it.setFont(f)
                     self.table.setItem(i, c, it)
+            if hasattr(self, "tbl_filter"):
+                self._filter_audit_table(self.tbl_filter.text())
+
+        # --------------------------------------------------------------------
+        # EXPORTS (GIF, PNG, CSV, JSON)
+        # --------------------------------------------------------------------
+        def export_gif(self):
+            if not self.records:
+                return
+            if not HAS_PIL:
+                QMessageBox.warning(self, "Pillow Required", "Install Pillow to export animated GIFs:\n  pip install pillow")
+                return
+            z0 = self.records[0].z_parent
+            path, _ = QFileDialog.getSaveFileName(
+                self, "Export Animated Cascade GIF", f"IT3_v5_cascade_Z{z0}.gif", "GIF Files (*.gif)")
+            if not path:
+                return
+            self.status.showMessage(f"Rendering {len(self.records)} frames to GIF...")
+            QApplication.processEvents()
+            try:
+                export_cascade_gif(self.records, path, duration_ms=self.speed_slider.value())
+                self.status.showMessage(f"Animated GIF saved: {path}")
+                QMessageBox.information(self, "GIF Export Complete", f"Saved {len(self.records)}-frame animated GIF:\n{path}")
+            except Exception as e:
+                QMessageBox.critical(self, "GIF Export Error", str(e))
 
         def export_png(self):
             i = self.tabs.currentIndex()
             if i == 2:
                 self.export_csv(); return
-            fig = {0: self.f_hud, 1: self.f_mat, 3: self.f_cern}[i]
+            if i == 6:
+                self.export_ledger(); return
+            fig_map = {0: self.f_hud, 1: self.f_mat, 3: self.f_cern, 4: self.f_dual, 5: self.f_rom}
+            fig = fig_map.get(i, self.f_hud)
             z0 = self.records[0].z_parent if self.records else 0
             path, _ = QFileDialog.getSaveFileName(
-                self, "Save PNG", f"IT3_v3_tab{i+1}_Z{z0}.png", "PNG (*.png)")
+                self, "Save PNG", f"IT3_v5_tab{i+1}_Z{z0}.png", "PNG (*.png)")
             if path:
                 fig.savefig(path, dpi=180, facecolor=BG)
                 QMessageBox.information(self, "Export", f"saved:\n{path}")
@@ -1816,7 +2836,7 @@ if HAS_PYQT:
             if not self.records:
                 return
             path, _ = QFileDialog.getSaveFileName(
-                self, "Save CSV", f"IT3_v3_audit_Z{self.records[0].z_parent}.csv", "CSV (*.csv)")
+                self, "Save CSV", f"IT3_v5_audit_Z{self.records[0].z_parent}.csv", "CSV (*.csv)")
             if not path:
                 return
             with open(path, "w", newline="", encoding="utf-8") as fh:
@@ -1834,14 +2854,14 @@ if HAS_PYQT:
 
         def export_ledger(self):
             path, _ = QFileDialog.getSaveFileName(
-                self, "Save ledger", "IT3_v3_ledger.json", "JSON (*.json)")
+                self, "Save ledger", "IT3_v5_ledger.json", "JSON (*.json)")
             if path:
                 build_ledger().to_json(path)
                 QMessageBox.information(self, "Export", f"ledger saved:\n{path}")
 
 
 def main() -> None:
-    p = argparse.ArgumentParser(description=f"IT3-WavePixel v{VERSION} hardened suite")
+    p = argparse.ArgumentParser(description=f"IT3-WavePixel v{VERSION} full-screen PyQt6 suite")
     p.add_argument("--self-test", action="store_true")
     p.add_argument("--transmute", nargs=2, metavar=("SRC", "DST"))
     p.add_argument("--batch-export", metavar="DIR")
@@ -1849,6 +2869,7 @@ def main() -> None:
     p.add_argument("--firewall", action="store_true")
     p.add_argument("--version", action="version", version=f"IT3-WavePixel {VERSION}")
     args = p.parse_args()
+
     if args.self_test:
         sys.exit(run_self_test(args.ledger))
     if args.ledger:
@@ -1859,11 +2880,19 @@ def main() -> None:
         sys.exit(cli_transmute(*args.transmute))
     if args.batch_export:
         sys.exit(batch_export(args.batch_export))
+
     if not HAS_PYQT:
-        print("[!] PyQt6 not available -> CLI ledger instead.\n")
+        print("=" * 78)
+        print("[!] PyQt6 GUI could not be launched because PyQt6 failed to import:")
+        print(f"    {PYQT_IMPORT_ERR}")
+        print("    Install PyQt6 via:  pip install PyQt6 matplotlib numpy pillow")
+        print("    Falling back to CLI Level-A self-test ledger...")
+        print("=" * 78)
         sys.exit(run_self_test())
+
     app = QApplication(sys.argv)
-    win = IT3Suite(); win.show()
+    win = IT3Suite()
+    win.showMaximized()
     sys.exit(app.exec())
 
 
